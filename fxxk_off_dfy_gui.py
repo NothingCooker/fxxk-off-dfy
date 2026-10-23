@@ -58,8 +58,8 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1000x780")
-        self.minsize(900, 680)
+        self.geometry("1040x840")
+        self.minsize(940, 720)
         self.configure(bg=BG)
 
         self.q: "queue.Queue[tuple]" = queue.Queue()
@@ -273,7 +273,8 @@ class App(tk.Tk):
 
         # ---------- 视频 ----------
         vids = ttk.LabelFrame(self, text=" 监控对象 ")
-        vids.pack(fill="both", expand=False, padx=14, pady=(0, 10))
+        # 固定高度：不要让它 expand，否则会把日志区和按钮区挤出窗口
+        vids.pack(fill="x", padx=14, pady=(0, 10))
         vh = tk.Frame(vids, bg=CARD)
         vh.pack(fill="x", padx=10, pady=(8, 4))
         self.var_auto = tk.BooleanVar(value=True)
@@ -288,9 +289,9 @@ class App(tk.Tk):
         tk.Label(vh, text="秒", bg=CARD, fg=DIM, font=FONT_SMALL).pack(side="left", padx=(4, 0))
 
         tree_wrap = tk.Frame(vids, bg=CARD)
-        tree_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        tree_wrap.pack(fill="x", expand=False, padx=10, pady=(0, 10))
         columns = ("bvid", "title", "comment")
-        self.tree = ttk.Treeview(tree_wrap, columns=columns, show="headings", height=5)
+        self.tree = ttk.Treeview(tree_wrap, columns=columns, show="headings", height=4)
         self.tree.heading("bvid", text="BV 号")
         self.tree.heading("title", text="标题")
         self.tree.heading("comment", text="评论数")
@@ -299,7 +300,7 @@ class App(tk.Tk):
         self.tree.column("comment", width=80, anchor="e", stretch=False)
         sb = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
-        self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.pack(side="left", fill="x", expand=True)
         sb.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self._on_tree_click)
 
