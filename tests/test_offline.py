@@ -251,6 +251,28 @@ class GuardTest(unittest.TestCase):
             guard = g.Guard(cfg, api=FakeAPI(), dry_run=None)
             self.assertTrue(guard.dry_run, "dry_run=%r 应该按 dry-run 处理" % (bad,))
 
+    # ---- 12. 全量历史：忽略回溯窗口 -------------------------------------
+    def test_full_history_ignores_lookback(self):
+        old = g.now_ts() - 30 * 24 * 3600
+        api = FakeAPI(main_pages=[page([
+            reply(1, 5001, "旅行者的大肥鱼", "本鲸来了", ctime=old),
+        ])])
+        guard = self.make_guard(api, dry_run=False, lookback_hours=1, full_history=True)
+        totals = guard.run_once()
+        self.assertEqual(api.deleted, [1])
+        self.assertEqual(totals["scanned"], 1)
+
+    # ---- 13. 默认模式仍然遵守回溯窗口（对照上一条）-----------------------
+    def test_lookback_still_respected_by_default(self):
+        old = g.now_ts() - 30 * 24 * 3600
+        api = FakeAPI(main_pages=[page([
+            reply(1, 5001, "旅行者的大肥鱼", "本鲸来了", ctime=old),
+        ])])
+        guard = self.make_guard(api, dry_run=False, lookback_hours=1, full_history=False)
+        totals = guard.run_once()
+        self.assertEqual(api.deleted, [])
+        self.assertEqual(totals["scanned"], 0)
+
 
 class JudgeRegressionTest(unittest.TestCase):
     """规则引擎的回归用例（不涉及接口）。"""

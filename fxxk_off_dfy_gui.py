@@ -112,6 +112,7 @@ class App(tk.Tk):
         cfg["skip_pinned"] = bool(self.var_skip_pinned.get())
         cfg["skip_self"] = bool(self.var_skip_self.get())
         cfg["include_sub_replies"] = bool(self.var_subs.get())
+        cfg["full_history"] = bool(self.var_full.get())
         cfg["auto_discover"] = bool(self.var_auto.get())
         cfg["videos"] = self._checked_bvids()
         words = [w.strip() for w in self.var_words.get().split(",") if w.strip()]
@@ -269,7 +270,7 @@ class App(tk.Tk):
         tk.Label(r2, text="次后", bg=CARD, fg=DIM, font=FONT_SMALL).pack(side="left", padx=(4, 0))
 
         r3 = tk.Frame(rules, bg=CARD)
-        r3.pack(fill="x", padx=10, pady=(0, 10))
+        r3.pack(fill="x", padx=10, pady=(0, 6))
         self.var_skip_pinned = tk.BooleanVar(value=True)
         ttk.Checkbutton(r3, text="跳过置顶", variable=self.var_skip_pinned).pack(side="left")
         self.var_skip_self = tk.BooleanVar(value=True)
@@ -280,6 +281,14 @@ class App(tk.Tk):
         self.var_words = tk.StringVar()
         ttk.Entry(r3, textvariable=self.var_words).pack(side="left", fill="x", expand=True)
         tk.Label(r3, text="逗号分隔", bg=CARD, fg=DIM, font=FONT_SMALL).pack(side="left", padx=(6, 0))
+
+        r4 = tk.Frame(rules, bg=CARD)
+        r4.pack(fill="x", padx=10, pady=(0, 8))
+        self.var_full = tk.BooleanVar(value=False)
+        ttk.Checkbutton(r4, text="全量历史（忽略回溯窗口，扫描所有可见主楼）",
+                        variable=self.var_full).pack(side="left")
+        tk.Label(r4, text="首次清旧评论时勾上；评论多的视频会翻很多页，注意风控",
+                 bg=CARD, fg=DIM, font=FONT_SMALL).pack(side="left", padx=(8, 0))
 
         # ---------- 视频 ----------
         vids = ttk.LabelFrame(self, text=" 监控对象 ")
@@ -380,6 +389,7 @@ class App(tk.Tk):
         self.var_skip_pinned.set(bool(cfg.get("skip_pinned", True)))
         self.var_skip_self.set(bool(cfg.get("skip_self", True)))
         self.var_subs.set(bool(cfg.get("include_sub_replies", True)))
+        self.var_full.set(bool(cfg.get("full_history")))
         self.var_auto.set(bool(cfg.get("auto_discover", True)))
         self.var_words.set(",".join(str(w) for w in (cfg.get("custom_words") or [])))
         self._sync_mode_badge()

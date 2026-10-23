@@ -10,6 +10,7 @@
 
   "interval_seconds": 120,
   "lookback_hours": 72,
+  "full_history": false,
   "max_pages": 8,
   "page_size": 20,
   "include_sub_replies": true,
@@ -29,7 +30,8 @@
 
   "threshold": 60,
   "tier": "standard",
-  "name_patterns": ["鱼", "鲸"],
+  "name_patterns": ["大肥鱼", "肥鱼", "鲸鱼", "大鲸", "鲛鱼", "家的DSH"],
+  "name_soft_patterns": ["鱼", "鲸"],
   "brand_words": [
     "大肥鱼", "肥鱼", "鲸鱼", "大肥鲸", "鲸鱼娘",
     "本鲸", "本鱼", "本肥鱼", "小鲛鱼"

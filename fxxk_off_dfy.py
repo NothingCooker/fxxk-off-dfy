@@ -72,8 +72,11 @@ DEFAULT_REPORT_REASON = 8
 # 这个更狠的场景调整了保守程度：宁可漏一条，不要删掉真人）。
 # ---------------------------------------------------------------------------
 
-# 硬命中：出现即判定，不看分数。
-DEFAULT_NAME_PATTERNS = [r"鱼", r"鲸"]  # 昵称含鱼/鲸，两套方案都标称 100% 精度
+# 昵称硬命中：一定是「某某的大肥鱼」这类模板。注意不能只写「鱼」——
+# 实测真评论区里就有「章鱼幻想」「鲨鱼风暴辣椒」「鱼丙丙」这种昵称。
+DEFAULT_NAME_PATTERNS = [r"大肥鱼", r"肥鱼", r"鲸鱼", r"大鲸", r"鲛鱼", r"家的DSH"]
+# 昵称里出现单个鱼/鲸只加分（40），必须配合正文特征才判死
+DEFAULT_NAME_SOFT = [r"鱼", r"鲸"]
 DEFAULT_BRAND_WORDS = [
     "大肥鱼", "肥鱼", "鲸鱼", "大肥鲸", "鲸鱼娘",
     "本鲸", "本鱼", "本肥鱼", "小鲛鱼",
@@ -115,6 +118,7 @@ DEFAULT_CONFIG_DATA: Dict[str, Any] = {
 
     "interval_seconds": 120,
     "lookback_hours": 72,
+    "full_history": False,
     "max_pages": 8,
     "page_size": 20,
     "include_sub_replies": True,
@@ -135,6 +139,7 @@ DEFAULT_CONFIG_DATA: Dict[str, Any] = {
     "threshold": 60,
     "tier": "standard",
     "name_patterns": DEFAULT_NAME_PATTERNS,
+    "name_soft_patterns": DEFAULT_NAME_SOFT,
     "brand_words": DEFAULT_BRAND_WORDS,
     "prompt_words": DEFAULT_PROMPT_WORDS,
     "soft_words": DEFAULT_SOFT_WORDS,
@@ -271,6 +276,14 @@ def save_json(path: str, data: Any) -> None:
 def merge_config(user: Dict[str, Any]) -> Dict[str, Any]:
     cfg = json.loads(json.dumps(DEFAULT_CONFIG_DATA))  # deep copy
     cfg.update({k: v for k, v in (user or {}).items() if not k.startswith("_")})
+    # 旧版把「鱼」「鲸」当成昵称硬命中，实测会误删「章鱼幻想」「鲨鱼风暴辣椒」这类真人昵称。
+    # 老配置文件里如果还是旧值，自动升级成「昵称模板硬命中 + 单字只加分」。
+    legacy = {str(x) for x in as_list(cfg.get("name_patterns"))}
+    if legacy and legacy <= {"鱼", "鲸"}:
+        cfg["name_patterns"] = list(DEFAULT_NAME_PATTERNS)
+        warn("检测到旧版昵称规则（单字「鱼/鲸」直接判死），已自动升级为只加分，避免误删真人。")
+    if "name_soft_patterns" not in cfg or not as_list(cfg.get("name_soft_patterns")):
+        cfg["name_soft_patterns"] = list(DEFAULT_NAME_SOFT)
     return cfg
 
 
@@ -674,15 +687,15 @@ class BiliAPI:
 # ---------------------------------------------------------------------------
 
 TIER_FLAGS: Dict[str, Dict[str, bool]] = {
-    # 小杯：只认强特征（昵称、品牌词、AI 残留、数值矩阵、重复洗稿），几乎没有误杀
+    # 小杯：只认强特征（昵称模板、品牌词、AI 残留、数值矩阵、重复洗稿），几乎没有误杀
     "cup": {"soft": False, "at": False, "punct": False, "char": False, "summary": False,
-            "long": False, "ai_suffix": True, "level": True},
+            "long": False, "ai_suffix": True, "level": True, "name_soft": True},
     # 标准：加上软词、@、总结模板、超长文 —— 适合直接删除
     "standard": {"soft": True, "at": True, "punct": False, "char": False, "summary": True,
-                 "long": True, "ai_suffix": True, "level": True},
+                 "long": True, "ai_suffix": True, "level": True, "name_soft": True},
     # 杀戮：再把全角标点、破折号、直角引号、单字鱼鲸算上，误杀率明显上升
     "kill": {"soft": True, "at": True, "punct": True, "char": True, "summary": True,
-             "long": True, "ai_suffix": True, "level": True},
+             "long": True, "ai_suffix": True, "level": True, "name_soft": True},
 }
 
 RE_QUOTE_PREFIX = re.compile(r"^回复\s*@[\s\S]{0,40}?\s*[:：]\s*")
@@ -814,6 +827,18 @@ def judge(v: ReplyView, cfg: Dict[str, Any], up_mid: int = 0,
         return vt
 
     # ---- 3) 软信号累加 --------------------------------------------------
+    # 昵称里带单个「鱼/鲸」只加分：真人叫「章鱼幻想」「鲨鱼风暴辣椒」的太多了，
+    # 光凭这个字判死会误删。要配合正文特征（@、总结模板、口癖…）才过线。
+    if flags.get("name_soft", True):
+        for pat in as_list(cfg.get("name_soft_patterns")):
+            try:
+                if pat and re.search(str(pat), uname):
+                    vt.score += 40
+                    vt.rules.append("name_soft+40(/%s/)" % pat)
+                    break
+            except re.error:
+                continue
+
     soft = cfg.get("soft_words") or {}
     if isinstance(soft, str):
         soft = {soft: 20}
@@ -1053,6 +1078,7 @@ class Guard:
             self.dry_run = bool(dry_run)
         self.up_mid = int(cfg.get("mid") or 0)
         self.cutoff = 0
+        self.full_history = False
         self.totals = {"scanned": 0, "hit": 0, "deleted": 0, "would": 0,
                        "failed": 0, "reported": 0, "blocked": 0, "gone": 0}
 
@@ -1130,15 +1156,18 @@ class Guard:
         max_pages = int(self.cfg.get("max_pages") or 8)
         lookback = int(self.cfg.get("lookback_hours") or 72) * 3600
         cutoff = now_ts() - lookback
-        self.cutoff = cutoff
+        # full_history = 忽略时间窗口，把所有可见主楼都扫一遍（首次清历史用）
+        self.full_history = bool(self.cfg.get("full_history"))
+        self.cutoff = 0 if self.full_history else cutoff
         # 游标 = 上一轮扫描到的最老评论时间；下一轮只看比它新的评论
         cursor = int(rec.get("last_seen_ctime") or 0)
         first_run = cursor <= 0
-        stop_at = cutoff if first_run else cursor
+        stop_at = 0 if self.full_history else (cutoff if first_run else cursor)
 
-        log("扫描 %s  %s" % (bvid or ("av%d" % aid), truncate(title, 40)))
+        log("扫描 %s  %s%s" % (bvid or ("av%d" % aid), truncate(title, 40),
+                              "（全量历史）" if self.full_history else ""))
         stats = {"scanned": 0, "hit": 0, "deleted": 0, "would": 0, "failed": 0,
-                 "reported": 0, "blocked": 0, "gone": 0, "pages": 0}
+                 "reported": 0, "blocked": 0, "gone": 0, "pages": 0, "total": 0}
 
         main_views: List[ReplyView] = []
         scanned_ctimes: List[int] = []
@@ -1172,6 +1201,7 @@ class Guard:
 
             stats["pages"] += 1
             replies = page.get("replies") or []
+            stats["total"] = max(stats["total"], int(page.get("count") or 0))
 
             # 老接口对未登录/被风控的请求会给 code=0 + 空列表，这里自适应切到
             # 前端在用的 wbi/main，避免「视频明明有几十万评论却扫到 0 条」
@@ -1223,13 +1253,16 @@ class Guard:
 
         if truncated:
             warn("  评论量大，翻满 %d 页仍未追平；建议调大 max_pages 或缩短轮询间隔。" % max_pages)
+        elif self.full_history:
+            # 全量模式下不推进游标：下次仍然全量扫（想回到增量就把 full_history 关掉）
+            rec["last_seen_ctime"] = 0
         elif scanned_ctimes and (not use_wbi_main or wbi_mode == 2):
             # 只有完整追平、且排序确定是按时间时才推进游标；
             # 截断或排序不确定（mode!=2 可能是热度序）时保持旧游标，下轮重来，避免漏扫
             rec["last_seen_ctime"] = min(scanned_ctimes)
 
-        log("  页数 %(pages)d / 扫描 %(scanned)d / 命中 %(hit)d / 删除 %(deleted)d / 待删 %(would)d / "
-            "失败 %(failed)d / 举报 %(reported)d / 拉黑 %(blocked)d" % stats)
+        log("  评论总数 %(total)d（含楼中楼） / 页数 %(pages)d / 扫描 %(scanned)d / 命中 %(hit)d / "
+            "删除 %(deleted)d / 待删 %(would)d / 失败 %(failed)d / 举报 %(reported)d / 拉黑 %(blocked)d" % stats)
         for k in ("scanned", "hit", "deleted", "would", "failed", "reported", "blocked", "gone"):
             self.totals[k] += stats.get(k, 0)
         return stats
@@ -1457,32 +1490,36 @@ def selftest() -> int:
     base = merge_config({})
     up_mid = 1
     cases: List[Tuple[str, Dict[str, Any], Dict[str, Any], bool, Optional[Dict[str, int]]]] = [
-        ("昵称带鱼 -> 硬命中", _mk(101, 5001, "旅行者的大肥鱼", "这视频真不错"), {}, True, None),
-        ("昵称带鲸 -> 硬命中", _mk(102, 5002, "深海的鲸", "来了"), {}, True, None),
-        ("品牌词 本鲸", _mk(103, 5003, "路人", "本鲸今天也来打卡"), {}, True, None),
-        ("Prompt 残留", _mk(104, 5004, "路人", "作为一个语言模型，我认为这期视频很有价值"),
+        ("昵称大肥鱼 -> 硬命中", _mk(101, 5001, "旅行者的大肥鱼", "这视频真不错"), {}, True, None),
+        ("昵称含单字鲸 -> 只加分", _mk(102, 5002, "深海的鲸", "来了"), {}, False, None),
+        ("真人昵称章鱼幻想 -> 不命中", _mk(103, 5003, "章鱼幻想", "这猫粮看着不错"), {}, False, None),
+        ("真人昵称鲨鱼辣椒 -> 不命中", _mk(104, 5004, "鲨鱼风暴辣椒", "上桌就用水壶喷水，喷他脸上"), {}, False, None),
+        ("昵称含鱼 + @ + 总结 -> 命中", _mk(105, 5005, "鱼丙丙",
+                                    "首先这个观点很有意思 @李大锤 其次数据也对得上"), {}, True, None),
+        ("品牌词 本鲸", _mk(106, 5006, "路人", "本鲸今天也来打卡"), {}, True, None),
+        ("Prompt 残留", _mk(107, 5007, "路人", "作为一个语言模型，我认为这期视频很有价值"),
          {}, True, None),
-        ("数值矩阵", _mk(105, 5005, "路人", "效率提升 96.5%，成本降低 12.3倍，覆盖 2.2万 用户"),
+        ("数值矩阵", _mk(108, 5008, "路人", "效率提升 96.5%，成本降低 12.3倍，覆盖 2.2万 用户"),
          {}, True, None),
-        ("真人聊鱼 -> 不命中", _mk(106, 5006, "老王", "这条鱼好大，钓上来得有多重啊"), {}, False, None),
-        ("真人 @ -> 不命中", _mk(107, 5007, "老王", "@张三 你说得对"), {}, False, None),
-        ("总结模板 + @ -> 命中", _mk(108, 5008, "路人", "首先这个观点很有意思 @李大锤 其次数据也对得上"),
+        ("真人聊鱼 -> 不命中", _mk(109, 5009, "老王", "这条鱼好大，钓上来得有多重啊"), {}, False, None),
+        ("真人 @ -> 不命中", _mk(110, 5010, "老王", "@张三 你说得对"), {}, False, None),
+        ("总结模板 + @ -> 命中", _mk(111, 5011, "路人", "首先这个观点很有意思 @李大锤 其次数据也对得上"),
          {}, True, None),
-        ("置顶评论 -> 跳过", _mk(109, 5009, "xx的大肥鱼", "本鲸置顶", top=True), {}, False, None),
-        ("白名单 mid -> 跳过", _mk(110, 777, "xx的大肥鱼", "本鲸来了"),
+        ("置顶评论 -> 跳过", _mk(112, 5012, "xx的大肥鱼", "本鲸置顶", top=True), {}, False, None),
+        ("白名单 mid -> 跳过", _mk(113, 777, "xx的大肥鱼", "本鲸来了"),
          {"whitelist_mids": [777]}, False, None),
-        ("自定义词 -> 命中", _mk(111, 5011, "路人", "这段内容明显是洗稿"),
+        ("自定义词 -> 命中", _mk(114, 5014, "路人", "这段内容明显是洗稿"),
          {"custom_words": ["洗稿"]}, True, None),
-        ("重复矩阵 -> 命中", _mk(112, 5012, "路人", "这期视频的总结写得太到位了我很喜欢"),
+        ("重复矩阵 -> 命中", _mk(115, 5015, "路人", "这期视频的总结写得太到位了我很喜欢"),
          {}, True, {"这期视频的总结写得太到位了我很喜欢": 3}),
-        ("小杯档 @ 不命中", _mk(113, 5013, "老王", "@张三 你说得对"),
+        ("小杯档 @ 不命中", _mk(116, 5016, "老王", "@张三 你说得对"),
          {"tier": "cup"}, False, None),
-        ("杀戮档标点 -> 命中", _mk(114, 5014, "老王", "「这鱼：好看；真的；不错——」"),
+        ("杀戮档标点 -> 命中", _mk(117, 5017, "老王", "「这鱼：好看；真的；不错——」"),
          {"tier": "kill"}, True, None),
-        ("长文总结模板 -> 命中", _mk(115, 5015, "路人",
+        ("长文总结模板 -> 命中", _mk(118, 5018, "路人",
                               "首先" + "这期视频讲了很多有意思的东西，" * 24 + "其次" + "最后" + "总结一下",
                               level=0), {}, True, None),
-        ("普通真人评论 -> 不命中", _mk(116, 5016, "老王", "三连了，下期想看这个系列的续集"), {}, False, None),
+        ("普通真人评论 -> 不命中", _mk(119, 5019, "老王", "三连了，下期想看这个系列的续集"), {}, False, None),
     ]
 
     fails = 0
@@ -1586,6 +1623,8 @@ def _apply_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str,
         cfg["report"] = True
     if getattr(args, "block", False):
         cfg["auto_block"] = True
+    if getattr(args, "all", False):
+        cfg["full_history"] = True
     return cfg
 
 
@@ -1691,6 +1730,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--video", nargs="*", help="只检查这些 bvid")
     s.add_argument("--tier", choices=["cup", "standard", "kill"], help="规则档位")
     s.add_argument("--threshold", type=int, help="软信号阈值")
+    s.add_argument("--all", action="store_true", help="忽略回溯窗口，扫全部可见评论")
     s.set_defaults(func=cmd_check)
 
     s = sub.add_parser("run", help="守护循环，正式清理")
@@ -1702,6 +1742,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--interval", type=int, help="轮询间隔秒数")
     s.add_argument("--report", action="store_true", help="命中后一并举报")
     s.add_argument("--block", action="store_true", help="同一账号反复命中后拉黑")
+    s.add_argument("--all", action="store_true", help="忽略回溯窗口，扫全部可见评论")
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("stats", help="查看累计统计与已处理记录")
