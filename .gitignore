@@ -1,0 +1,19 @@
+# 本地敏感数据：Cookie 等价于账号密码，绝对不要提交
+config.json
+state.json
+state.json.tmp
+events.jsonl
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

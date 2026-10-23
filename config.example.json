@@ -1,0 +1,68 @@
+{
+  "_comment": "复制成 config.json 再填 cookie。dry_run 先保持 true，跑 check 确认没有误杀后再改 false。",
+
+  "cookie": "",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "mid": 0,
+  "videos": [],
+  "auto_discover": true,
+  "discover_pages": 2,
+
+  "interval_seconds": 120,
+  "lookback_hours": 72,
+  "max_pages": 8,
+  "page_size": 20,
+  "include_sub_replies": true,
+  "sub_reply_pages": 2,
+
+  "dry_run": true,
+  "report": false,
+  "report_reason": 8,
+  "auto_block": false,
+  "block_after_hits": 3,
+
+  "skip_pinned": true,
+  "skip_self": true,
+  "whitelist_mids": [],
+  "whitelist_rpids": [],
+
+  "threshold": 60,
+  "tier": "standard",
+  "name_patterns": ["鱼", "鲸"],
+  "brand_words": [
+    "大肥鱼", "肥鱼", "鲸鱼", "大肥鲸", "鲸鱼娘",
+    "本鲸", "本鱼", "本肥鱼", "小鲛鱼"
+  ],
+  "prompt_words": [
+    "作为AI", "作为 AI", "作为人工智能", "语言模型", "人工智能助手",
+    "系统提示词", "我的设定", "被设定为", "prompt里", "prompt 里",
+    "我是被派来", "主人拿自己的活"
+  ],
+  "soft_words": {
+    "主人": 30,
+    "喵": 22,
+    "喵~": 25,
+    "本喵": 40,
+    "家人们": 8
+  },
+  "summary_words": [
+    "首先", "其次", "再次", "最后", "综上", "总之", "总结一下",
+    "整体来看", "总的来说", "视频中提到", "up主提到", "UP主提到",
+    "值得注意的是", "需要指出"
+  ],
+  "ai_name_suffix": ["AI", "Bot", "GPT", "助手", "智能", "数字人"],
+  "custom_words": [],
+
+  "numeric_matrix_min": 3,
+  "summary_min_hits": 2,
+  "long_text_len": 300,
+  "duplicate_min_len": 12,
+
+  "request_min_delay": 0.8,
+  "request_max_delay": 1.6,
+  "timeout": 20,
+  "max_retries": 3,
+
+  "state_file": "state.json",
+  "log_file": "events.jsonl"
+}
