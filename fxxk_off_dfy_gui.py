@@ -68,6 +68,7 @@ class App(tk.Tk):
         self.running = False
         self.busy = False
         self.me: Dict[str, Any] = {}
+        self._cookie_value = ""
         self.video_rows: Dict[str, Dict[str, Any]] = {}
         self.video_checked: Dict[str, bool] = {}
         self.last_totals: Dict[str, int] = {}
@@ -96,7 +97,7 @@ class App(tk.Tk):
     def _collect_cfg(self) -> Dict[str, Any]:
         cfg = json.loads(json.dumps({k: v for k, v in self.cfg.items() if k != "_comment"}))
         cfg["_comment"] = "图形界面生成。Cookie 等价于账号密码，别提交到 git、别外发。"
-        cfg["cookie"] = self.var_cookie.get().strip()
+        cfg["cookie"] = self._cookie_value.strip()
         cfg["tier"] = self.var_tier.get()
         cfg["threshold"] = int(float(self.var_threshold.get()))
         cfg["lookback_hours"] = int(self.var_lookback.get())
@@ -198,19 +199,28 @@ class App(tk.Tk):
         self.lbl_state.pack(side="right", padx=(0, 12))
 
         # ---------- 账号 ----------
+        # 注意：Cookie 可能有好几 KB。把它塞进 Entry 会让 Tk 对每个字符做一次
+        # 遮挡渲染，粘贴时会明显卡顿，所以这里 Entry 只显示一行摘要，
+        # 真正的 Cookie 存在 self._cookie_value 里。
         card = self._card(self)
         row = tk.Frame(card, bg=CARD)
         row.pack(fill="x")
         tk.Label(row, text="Cookie", bg=CARD, fg=TEXT, font=FONT_BOLD, width=8, anchor="w").pack(side="left")
         self.var_cookie = tk.StringVar()
-        self.entry_cookie = ttk.Entry(row, textvariable=self.var_cookie, show="•")
+        self.entry_cookie = ttk.Entry(row, textvariable=self.var_cookie, state="readonly")
         self.entry_cookie.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(row, text="显示", style="Ghost.TButton", width=5,
-                   command=self._toggle_cookie).pack(side="left", padx=(0, 6))
+        ttk.Button(row, text="粘贴", style="Ghost.TButton", width=6,
+                   command=self._paste_cookie).pack(side="left", padx=(0, 6))
+        ttk.Button(row, text="编辑", style="Ghost.TButton", width=6,
+                   command=self._edit_cookie).pack(side="left", padx=(0, 6))
+        ttk.Button(row, text="清除", style="Ghost.TButton", width=6,
+                   command=self._clear_cookie).pack(side="left", padx=(0, 6))
         ttk.Button(row, text="校验登录", style="Ghost.TButton",
                    command=self._on_login).pack(side="left", padx=(0, 6))
         ttk.Button(row, text="获取方法", style="Ghost.TButton",
                    command=self._show_cookie_help).pack(side="left")
+        self.bind("<Control-v>", self._on_global_paste)
+        self.bind("<Control-V>", self._on_global_paste)
 
         info = tk.Frame(card, bg=CARD)
         info.pack(fill="x", pady=(8, 0))
@@ -353,7 +363,8 @@ class App(tk.Tk):
     # =====================================================================
     def _fill_from_cfg(self) -> None:
         cfg = self.cfg
-        self.var_cookie.set(str(cfg.get("cookie") or ""))
+        self._cookie_value = str(cfg.get("cookie") or "").strip()
+        self.var_cookie.set(self._cookie_summary())
         self.var_tier.set(str(cfg.get("tier") or "standard"))
         self.var_threshold.set(float(cfg.get("threshold") or 60))
         self.lbl_threshold.config(text=str(int(float(self.var_threshold.get()))))
@@ -402,8 +413,84 @@ class App(tk.Tk):
         self.lbl_tip.config(text="自动模式下会处理全部投稿，列表仅展示" if self.var_auto.get() else "")
         self._auto_mode = state == "disabled"
 
-    def _toggle_cookie(self) -> None:
-        self.entry_cookie.config(show="" if self.entry_cookie.cget("show") else "•")
+    # -- Cookie（不放进 Entry，避免长文本遮挡渲染卡顿）----------------------
+
+    def _cookie_summary(self) -> str:
+        v = self._cookie_value
+        if not v:
+            return ""
+        return "已保存 %d 字符　SESSDATA %s　bili_jct %s　（点「编辑」看全文）" % (
+            len(v), "✓" if "SESSDATA=" in v else "✗", "✓" if "bili_jct=" in v else "✗")
+
+    def _set_cookie(self, text: str) -> None:
+        text = (text or "").strip().replace("\r\n", "\n").replace("\r", "\n")
+        if text.lower().startswith("cookie:"):
+            text = text.split(":", 1)[1]
+        # 多行 Cookie 头拼成一行
+        text = " ".join(part.strip() for part in text.split("\n") if part.strip())
+        self._cookie_value = text
+        self.var_cookie.set(self._cookie_summary())
+        if text:
+            self.lbl_account.config(text="Cookie 已更新，记得点「校验登录」", fg=DIM)
+            self._append_log("info", "Cookie 已更新：%d 字符，SESSDATA %s，bili_jct %s"
+                             % (len(text),
+                                "有" if "SESSDATA=" in text else "缺失",
+                                "有" if "bili_jct=" in text else "缺失"))
+
+    def _paste_cookie(self) -> None:
+        try:
+            text = self.clipboard_get()
+        except tk.TclError:
+            text = ""
+        if not text.strip():
+            messagebox.showinfo("剪贴板是空的", "先在浏览器里复制 Cookie（F12 → Network → 复制整行），再点「粘贴」。")
+            return
+        self._set_cookie(text)
+
+    def _on_global_paste(self, event=None):
+        # 只在 Cookie 框获得焦点时接管 Ctrl+V，其它输入框不受影响
+        try:
+            focused = self.focus_get()
+        except Exception:
+            focused = None
+        if focused is self.entry_cookie:
+            self._paste_cookie()
+            return "break"
+        return None
+
+    def _clear_cookie(self) -> None:
+        if self._cookie_value and not messagebox.askyesno("清除 Cookie", "确定清空当前 Cookie？"):
+            return
+        self._set_cookie("")
+        self.var_cookie.set("")
+        self.lbl_account.config(text="未校验", fg=DIM)
+
+    def _edit_cookie(self) -> None:
+        win = tk.Toplevel(self)
+        win.title("Cookie 全文（可直接编辑）")
+        win.geometry("900x320")
+        win.configure(bg=CARD)
+        tk.Label(win, text="粘贴或修改后点「确定」。多行会自动拼成一行，\"Cookie: \" 前缀会自动去掉。",
+                 bg=CARD, fg=DIM, font=FONT_SMALL, anchor="w").pack(fill="x", padx=12, pady=(10, 4))
+        txt = tk.Text(win, wrap="char", font=FONT_MONO, height=10)
+        txt.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        txt.insert("1.0", self._cookie_value)
+
+        def from_clip() -> None:
+            try:
+                clip = self.clipboard_get()
+            except tk.TclError:
+                clip = ""
+            if clip:
+                txt.delete("1.0", "end")
+                txt.insert("1.0", clip)
+
+        bar = tk.Frame(win, bg=CARD)
+        bar.pack(fill="x", padx=12, pady=(0, 10))
+        ttk.Button(bar, text="从剪贴板粘贴", style="Ghost.TButton", command=from_clip).pack(side="left")
+        ttk.Button(bar, text="取消", style="Ghost.TButton", command=win.destroy).pack(side="right")
+        ttk.Button(bar, text="确定", style="Accent.TButton",
+                   command=lambda: (self._set_cookie(txt.get("1.0", "end")), win.destroy())).pack(side="right", padx=8)
 
     # =====================================================================
     # 日志
