@@ -176,12 +176,40 @@ def jitter_sleep(lo: float, hi: float) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
+# 日志出口：GUI 会注入一个回调，把日志同步到窗口里
+LOG_SINK: Optional[Any] = None
+_LOG_QUIET = False
+
+
+def set_log_sink(fn: Optional[Any], quiet: bool = True) -> None:
+    """给 GUI 用：fn(level, text)，level 取 'info' / 'warn'。quiet=True 时不再打印到控制台。"""
+    global LOG_SINK, _LOG_QUIET
+    LOG_SINK = fn
+    _LOG_QUIET = bool(quiet)
+
+
+def _emit(level: str, text: str) -> None:
+    stamp = datetime.now().strftime("%H:%M:%S")
+    line = "%s  %s" % (stamp, text) if level == "info" else "%s  [!] %s" % (stamp, text)
+    if not _LOG_QUIET:
+        try:
+            print(line, flush=True)
+        except Exception:
+            pass
+    sink = LOG_SINK
+    if sink is not None:
+        try:
+            sink(level, line)
+        except Exception:
+            pass
+
+
 def log(msg: str) -> None:
-    print("%s  %s" % (datetime.now().strftime("%H:%M:%S"), msg), flush=True)
+    _emit("info", msg)
 
 
 def warn(msg: str) -> None:
-    print("%s  [!] %s" % (datetime.now().strftime("%H:%M:%S"), msg), flush=True)
+    _emit("warn", msg)
 
 
 def truncate(s: str, n: int = 48) -> str:
@@ -1007,11 +1035,14 @@ class EventLog:
 
 class Guard:
     def __init__(self, cfg: Dict[str, Any], api: Optional[BiliAPI] = None,
-                 dry_run: Optional[bool] = None):
+                 dry_run: Optional[bool] = None, stop_event: Optional[Any] = None,
+                 on_round: Optional[Any] = None):
         self.cfg = cfg
         self.api = api or BiliAPI(cfg)
         self.state = State(cfg.get("state_file") or DEFAULT_STATE)
         self.events = EventLog(cfg.get("log_file") or DEFAULT_LOG)
+        self.stop_event = stop_event      # GUI / 外部控制停止
+        self.on_round = on_round          # 每轮结束回调(totals)
         if dry_run is None:
             raw_flag = cfg.get("dry_run", True)
             if not isinstance(raw_flag, (bool, str)):
@@ -1345,6 +1376,9 @@ class Guard:
         return "deleted", extra
 
     # -- 整轮 --------------------------------------------------------------
+    def _stopped(self) -> bool:
+        return bool(self.stop_event is not None and self.stop_event.is_set())
+
     def run_once(self) -> Dict[str, int]:
         videos = self.resolve_videos()
         if not videos:
@@ -1352,6 +1386,9 @@ class Guard:
             return self.totals
         self.totals = {k: 0 for k in self.totals}
         for item in videos:
+            if self._stopped():
+                log("收到停止信号，本轮提前结束。")
+                break
             try:
                 self.scan_video(item)
             except KeyboardInterrupt:
@@ -1370,21 +1407,36 @@ class Guard:
 
     def run_loop(self, once: bool = False) -> None:
         interval = max(20, int(self.cfg.get("interval_seconds") or 120))
-        while True:
+        while not self._stopped():
             try:
                 self.run_once()
             except KeyboardInterrupt:
                 log("收到中断，退出。")
                 return
+            except SystemExit as e:
+                warn(str(e))
+                if self.on_round:
+                    try:
+                        self.on_round(self.totals, str(e))
+                    except Exception:
+                        pass
+                return
+            if self.on_round:
+                try:
+                    self.on_round(self.totals, None)
+                except Exception:
+                    pass
             if once:
                 return
             sleep_s = interval + random.randint(0, max(1, interval // 10))
-            log("%d 秒后进入下一轮（Ctrl+C 退出）。" % sleep_s)
-            try:
-                time.sleep(sleep_s)
-            except KeyboardInterrupt:
-                log("收到中断，退出。")
-                return
+            log("%d 秒后进入下一轮。" % sleep_s)
+            deadline = time.time() + sleep_s
+            while time.time() < deadline:
+                if self._stopped():
+                    log("已停止。")
+                    return
+                time.sleep(min(0.5, max(0.0, deadline - time.time())))
+        log("已停止。")
 
 
 # ---------------------------------------------------------------------------
