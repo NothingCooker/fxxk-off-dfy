@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-dfy_guard.py —— B站「大肥鱼 / AI 机器人」评论清理器（服务端 API 版）
+fxxk_off_dfy.py —— B站「大肥鱼 / AI 机器人」评论清理器（服务端 API 版）
 
 和油猴脚本的区别：
     油猴（bilibili-dafeiyu-blocker）/ 扩展（Creel）只是「让你自己看不见」，机器人的评论
@@ -10,12 +10,12 @@ dfy_guard.py —— B站「大肥鱼 / AI 机器人」评论清理器（服务�
     删掉的是真评论，所有访客都看不到了，这才叫从根本解决。
 
 用法：
-    python dfy_guard.py init            # 生成 config.json（可粘 Cookie）
-    python dfy_guard.py whoami          # 校验 Cookie、打印账号信息
-    python dfy_guard.py check           # 只看不删（dry-run 体检，强烈建议先跑）
-    python dfy_guard.py run             # 守护循环，按 interval_seconds 轮询
-    python dfy_guard.py run --once      # 跑一轮就退出（给计划任务用）
-    python dfy_guard.py selftest        # 离线跑规则引擎自测，不需要 Cookie
+    python fxxk_off_dfy.py init            # 生成 config.json（可粘 Cookie）
+    python fxxk_off_dfy.py whoami          # 校验 Cookie、打印账号信息
+    python fxxk_off_dfy.py check           # 只看不删（dry-run 体检，强烈建议先跑）
+    python fxxk_off_dfy.py run             # 守护循环，按 interval_seconds 轮询
+    python fxxk_off_dfy.py run --once      # 跑一轮就退出（给计划任务用）
+    python fxxk_off_dfy.py selftest        # 离线跑规则引擎自测，不需要 Cookie
 
 依赖：仅标准库（requests 可选，没有就走 urllib）。Python 3.9+。
 """
@@ -57,8 +57,8 @@ USER_AGENT = (
 # ---------------------------------------------------------------------------
 REPORT_REASONS = {
     1: "垃圾广告",
-    2: "人身攻击",
-    3: "色情低俗",
+    2: "色情低俗",
+    3: "人身攻击",
     4: "引战",
     5: "剧透",
     6: "政治敏感",
@@ -119,6 +119,7 @@ DEFAULT_CONFIG_DATA: Dict[str, Any] = {
     "page_size": 20,
     "include_sub_replies": True,
     "sub_reply_pages": 2,
+    "wbi_mode": 2,
 
     "dry_run": True,
     "report": False,
@@ -218,10 +219,24 @@ def as_list(value: Any) -> List[Any]:
     return []
 
 
+def is_live_flag(value: Any) -> bool:
+    """只有明确的 false / "false" / "live" 才算「真的删」。
+    null、空串、缺省、类型写错一律按 dry-run 处理 —— 宁可少删，不能误删。"""
+    if value is False:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("false", "live")
+    return False
+
+
 def save_json(path: str, data: Any) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp, 0o600)   # config.json 里是 Cookie；Windows 上 no-op
+    except OSError:
+        pass
     os.replace(tmp, path)
 
 
@@ -296,21 +311,33 @@ class HttpClient:
         self._img_key = ""
         self._sub_key = ""
         self._wbi_ts = 0.0
+        self.auth_failed = False
         self.stats = {"requests": 0, "errors": 0}
 
     # -- cookie ------------------------------------------------------------
     def csrf(self) -> str:
         m = re.search(r"(?:^|;\s*)bili_jct=([^;]+)", self.cookie)
         if not m:
-            raise SystemExit(
-                "Cookie 里没有 bili_jct，删除/举报接口无法通过校验。\n"
-                "请在浏览器 F12 → 网络 → 任意请求的 Cookie 里复制完整 Cookie 填进 config.json。"
-            )
+            # 抛业务异常而不是 SystemExit：调用点可能被 try/except 包住，
+            # SystemExit 会直接终止整个守护进程
+            raise BiliError(-403, "Cookie 缺少 bili_jct，删除/举报接口无法通过校验"
+                                  "（重新复制完整 Cookie，必须含 bili_jct）")
         return m.group(1).strip()
 
     def sessdata(self) -> str:
         m = re.search(r"(?:^|;\s*)SESSDATA=([^;]+)", self.cookie)
         return m.group(1).strip() if m else ""
+
+    def preflight(self) -> None:
+        """启动预检：Cookie 必须同时具备 SESSDATA 和 bili_jct，否则直接退出并说清原因。"""
+        if not self.cookie:
+            raise SystemExit("config.json 的 cookie 是空的。先跑 python fxxk_off_dfy.py init，再把浏览器 Cookie 填进去。")
+        if not self.sessdata():
+            raise SystemExit("Cookie 里没有 SESSDATA（登录态），无法读取/删除评论。")
+        try:
+            self.csrf()
+        except BiliError as e:
+            raise SystemExit(str(e))
 
     def headers(self, referer: str = "https://www.bilibili.com/") -> Dict[str, str]:
         return {
@@ -321,6 +348,9 @@ class HttpClient:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Cookie": self.cookie,
         }
+
+    def _backoff(self, attempt: int, base: float = 8.0) -> float:
+        return min(120.0, base * (2 ** attempt)) + random.uniform(0, 3)
 
     # -- raw ---------------------------------------------------------------
     def _request(self, method: str, url: str, params: Optional[Dict[str, Any]] = None,
@@ -335,7 +365,8 @@ class HttpClient:
             headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
 
         last_err: Optional[Exception] = None
-        for attempt in range(self.max_retries):
+        attempts = 1 + max(0, self.max_retries)   # max_retries = 失败后的额外重试次数
+        for attempt in range(attempts):
             try:
                 jitter_sleep(self.min_delay, self.max_delay)
                 req = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
@@ -347,30 +378,34 @@ class HttpClient:
                 except json.JSONDecodeError:
                     if "<html" in raw[:200].lower():
                         raise RiskControlError(-412, "返回了风控页面（HTML）", url)
-                    raise BiliError(-1, "返回不是 JSON：%s" % raw[:200], url)
+                    raise BiliError(-1, "返回不是 JSON：%s" % raw[:80], url)
                 code = int(payload.get("code", 0))
                 if code == 0:
                     return payload
                 if code in (-352, -412, -509, -799):
                     raise RiskControlError(code, payload.get("message") or "风控", url)
                 if code == -101:
+                    self.auth_failed = True
                     raise BiliError(code, "账号未登录，Cookie 失效或缺少 SESSDATA", url)
                 raise BiliError(code, str(payload.get("message") or ""), url)
             except RiskControlError as e:
                 last_err = e
                 self.stats["errors"] += 1
-                backoff = min(120, 8 * (2 ** attempt)) + random.uniform(0, 3)
-                warn("风控 %s，退避 %.0fs 后重试 (%d/%d)" % (e.code, backoff, attempt + 1, self.max_retries))
+                self._wbi_ts = 0.0   # WBI 密钥可能已轮换，下次重新拉
+                backoff = self._backoff(attempt)
+                warn("风控 %s，退避 %.0fs 后重试 (%d/%d)"
+                     % (e.code, backoff, attempt + 1, attempts - 1))
                 time.sleep(backoff)
-            except BiliError as e:
+            except BiliError:
                 # 业务错误不重试：-404 已删除、-400 参数错误、-101 未登录…
                 raise
             except urllib.error.HTTPError as e:
                 last_err = e
                 self.stats["errors"] += 1
                 if e.code in (412, 429, 503):
-                    backoff = min(120, 10 * (2 ** attempt)) + random.uniform(0, 3)
-                    warn("HTTP %s，退避 %.0fs 后重试 (%d/%d)" % (e.code, backoff, attempt + 1, self.max_retries))
+                    backoff = self._backoff(attempt)
+                    warn("HTTP %s，退避 %.0fs 后重试 (%d/%d)"
+                         % (e.code, backoff, attempt + 1, attempts - 1))
                     time.sleep(backoff)
                     continue
                 raise BiliError(e.code, "HTTP 错误：%s" % e.reason, url)
@@ -378,8 +413,10 @@ class HttpClient:
                 last_err = e
                 self.stats["errors"] += 1
                 backoff = 3 * (attempt + 1)
-                warn("网络错误 %s，%ds 后重试 (%d/%d)" % (e, backoff, attempt + 1, self.max_retries))
+                warn("网络错误 %s，%ds 后重试 (%d/%d)" % (e, backoff, attempt + 1, attempts - 1))
                 time.sleep(backoff)
+        if isinstance(last_err, RiskControlError):
+            raise last_err   # 保留原始类型，让上层能切通道/跳过
         raise BiliError(-1, "重试耗尽：%s" % last_err, url)
 
     def get(self, url: str, params: Optional[Dict[str, Any]] = None,
@@ -397,15 +434,13 @@ class HttpClient:
         payload = self.get("https://api.bilibili.com/x/web-interface/nav")
         data = payload.get("data") or {}
         if not data.get("isLogin"):
-            raise SystemExit(
-                "未登录（nav.isLogin=false）。请把浏览器里登录态的完整 Cookie 填进 config.json：\n"
-                "  必填项：SESSDATA、bili_jct、DedeUserID\n"
-                "  建议一并带上：buvid3、b_nut、bili_ticket（缺了容易吃 -352 风控）"
-            )
+            # 不抛 SystemExit：调用链里可能被单个视频的 try/except 包住，
+            # 抛 SystemExit 会直接干掉整个进程
+            raise BiliError(-101, "未登录，无法取得 wbi_img（需要 SESSDATA）")
         img = _key_from_url((data.get("wbi_img") or {}).get("img_url", ""))
         sub = _key_from_url((data.get("wbi_img") or {}).get("sub_url", ""))
         if not img or not sub:
-            raise SystemExit("nav 接口没返回 wbi_img，B站接口可能改版了。")
+            raise BiliError(-1, "nav 没返回 wbi_img，接口可能改版了")
         self._img_key, self._sub_key, self._wbi_ts = img, sub, time.time()
         return img, sub
 
@@ -507,7 +542,9 @@ class BiliAPI:
                     }
             page = (payload.get("data") or {}).get("page") or {}
             total = int(page.get("count") or 0)
-            if pn * page_size >= total:
+            if total and pn * page_size >= total:
+                break
+            if len(vlist) < page_size:
                 break
         return list(found.values())
 
@@ -527,7 +564,9 @@ class BiliAPI:
     # -- 主楼评论 ----------------------------------------------------------
     def fetch_main_page(self, oid: int, pn: int = 1, ps: int = 20,
                         sort: int = 0) -> Dict[str, Any]:
-        """老分页接口，返回 {replies:[], top:{}, count:int, acount:int, is_end:bool}"""
+        """老分页接口，返回 {replies:[], top:{}, count:int, acount:int, is_end:bool}
+        注意：这个接口的 ps 实际上限是 20，传更大也不会多给。"""
+        ps = max(1, min(20, int(ps or 20)))
         payload = self.http.get(API_REPLY, {
             "type": 1, "oid": oid, "pn": pn, "ps": ps,
             "sort": sort, "nohot": 1, "plat": 1,
@@ -607,14 +646,14 @@ class BiliAPI:
 # ---------------------------------------------------------------------------
 
 TIER_FLAGS: Dict[str, Dict[str, bool]] = {
-    # 小杯：只认强特征（昵称、品牌词、AI 残留、数值矩阵），几乎没有误杀
-    "cup": {"at": False, "punct": False, "char": False, "summary": False,
+    # 小杯：只认强特征（昵称、品牌词、AI 残留、数值矩阵、重复洗稿），几乎没有误杀
+    "cup": {"soft": False, "at": False, "punct": False, "char": False, "summary": False,
             "long": False, "ai_suffix": True, "level": True},
-    # 标准：加上 @、总结模板、超长文、重复矩阵 —— 适合直接删除
-    "standard": {"at": True, "punct": False, "char": False, "summary": True,
+    # 标准：加上软词、@、总结模板、超长文 —— 适合直接删除
+    "standard": {"soft": True, "at": True, "punct": False, "char": False, "summary": True,
                  "long": True, "ai_suffix": True, "level": True},
     # 杀戮：再把全角标点、破折号、直角引号、单字鱼鲸算上，误杀率明显上升
-    "kill": {"at": True, "punct": True, "char": True, "summary": True,
+    "kill": {"soft": True, "at": True, "punct": True, "char": True, "summary": True,
              "long": True, "ai_suffix": True, "level": True},
 }
 
@@ -748,12 +787,31 @@ def judge(v: ReplyView, cfg: Dict[str, Any], up_mid: int = 0,
 
     # ---- 3) 软信号累加 --------------------------------------------------
     soft = cfg.get("soft_words") or {}
-    if isinstance(soft, (list, tuple)):
+    if isinstance(soft, str):
+        soft = {soft: 20}
+    elif isinstance(soft, (list, tuple)):
         soft = {str(w): 20 for w in soft}
-    for w, weight in soft.items():
-        if w and w in msg:
-            vt.score += int(weight)
-            vt.rules.append("soft:%s+%d" % (w, int(weight)))
+    elif not isinstance(soft, dict):
+        warn("soft_words 类型不对（应为对象），本轮忽略。")
+        soft = {}
+    if flags.get("soft", True):
+        # 按词长降序、已匹配区间不重复计分（否则「本喵」会连「喵」一起算）
+        covered = [False] * len(msg)
+        for w, weight in sorted(soft.items(), key=lambda kv: -len(str(kv[0]))):
+            w = str(w)
+            start = 0
+            while w:
+                idx = msg.find(w, start)
+                if idx < 0:
+                    break
+                if any(covered[idx:idx + len(w)]):
+                    start = idx + 1
+                    continue
+                for j in range(idx, idx + len(w)):
+                    covered[j] = True
+                vt.score += int(weight)
+                vt.rules.append("soft:%s+%d" % (w, int(weight)))
+                break
 
     body = _body_without_quote_prefix(msg)
     if flags.get("at") and RE_AT.search(body):
@@ -780,7 +838,8 @@ def judge(v: ReplyView, cfg: Dict[str, Any], up_mid: int = 0,
         summary_hits = [w for w in as_list(cfg.get("summary_words")) if w and str(w) in msg]
         need = int(cfg.get("summary_min_hits") or 2)
         if len(summary_hits) >= need:
-            gain = 40 + 10 * min(3, len(summary_hits) - need)
+            # 封顶 40：单条「总结模板」永远不足以自己过 60 分阈值，避免误删真人长评
+            gain = 40
             vt.score += gain
             vt.rules.append("summary+%d(%s)" % (gain, ",".join(str(x) for x in summary_hits[:4])))
 
@@ -833,28 +892,77 @@ class State:
 
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
-        self.data = load_json(self.path, None) or {}
-        self.data.setdefault("videos", {})
-        self.data.setdefault("blocked_mids", {})
-        self.data.setdefault("stats", {"deleted": 0, "reported": 0, "blocked": 0, "failed": 0})
+        self.data = self._load()
+
+    def _load(self) -> Dict[str, Any]:
+        raw: Any = {}
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            raw = {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            bad = "%s.corrupt-%d" % (self.path, now_ts())
+            try:
+                os.replace(self.path, bad)
+            except OSError:
+                pass
+            warn("state 文件损坏，已备份到 %s 并重建。" % os.path.basename(bad))
+            raw = {}
+        except OSError as e:
+            warn("读取 state 失败（%s），本轮按空状态处理。" % e)
+            raw = {}
+        if not isinstance(raw, dict):
+            warn("state 文件结构不对（顶层不是对象），已重建。")
+            raw = {}
+        for key in ("videos", "blocked_mids", "stats"):
+            if not isinstance(raw.get(key), dict):
+                raw[key] = {}
+        for key in ("deleted", "reported", "blocked", "failed", "would", "gone"):
+            raw["stats"].setdefault(key, 0)
+        return raw
 
     def video(self, key: str) -> Dict[str, Any]:
-        rec = self.data["videos"].setdefault(key, {
-            "aid": 0, "title": "", "handled": {}, "last_seen_ctime": 0,
-            "hits": {}, "first_run": now_ts(),
-        })
+        videos = self.data["videos"]
+        rec = videos.get(key)
+        if not isinstance(rec, dict):
+            rec = None
+        if rec is None:
+            rec = {"aid": 0, "title": "", "handled": {}, "last_seen_ctime": 0,
+                   "hits": {}, "fails": {}}
+            videos[key] = rec
+        rec.setdefault("aid", 0)
+        rec.setdefault("title", "")
+        rec.setdefault("last_seen_ctime", 0)
+        for field_name in ("handled", "hits", "fails"):
+            if not isinstance(rec.get(field_name), dict):
+                rec[field_name] = {}
         return rec
 
     def is_handled(self, key: str, rpid: int) -> bool:
         return str(rpid) in self.video(key)["handled"]
 
+    def handled_action(self, key: str, rpid: int) -> str:
+        rec = self.video(key)["handled"].get(str(rpid))
+        return str(rec.get("act") or "") if isinstance(rec, dict) else ""
+
     def mark(self, key: str, rpid: int, ctime: int, action: str) -> None:
         """记录已处置的评论。注意：不碰 last_seen_ctime（游标由 scan_video 统一推进）。"""
         rec = self.video(key)
         rec["handled"][str(rpid)] = {"ctime": int(ctime), "act": action, "at": now_ts()}
+        rec.get("fails", {}).pop(str(rpid), None)
         if len(rec["handled"]) > self.HANDLED_CAP:
             items = sorted(rec["handled"].items(), key=lambda kv: kv[1].get("ctime", 0))
             rec["handled"] = dict(items[-self.HANDLED_CAP:])
+
+    def note_fail(self, key: str, rpid: int) -> int:
+        rec = self.video(key)
+        fails = rec.setdefault("fails", {})
+        n = int(fails.get(str(rpid), 0)) + 1
+        fails[str(rpid)] = n
+        if len(fails) > 5000:
+            rec["fails"] = dict(list(fails.items())[-5000:])
+        return n
 
     def bump_hit(self, key: str, mid: int) -> int:
         rec = self.video(key)
@@ -904,8 +1012,16 @@ class Guard:
         self.api = api or BiliAPI(cfg)
         self.state = State(cfg.get("state_file") or DEFAULT_STATE)
         self.events = EventLog(cfg.get("log_file") or DEFAULT_LOG)
-        self.dry_run = bool(cfg.get("dry_run", True)) if dry_run is None else bool(dry_run)
+        if dry_run is None:
+            raw_flag = cfg.get("dry_run", True)
+            if not isinstance(raw_flag, (bool, str)):
+                warn("dry_run 的取值是 %r，既不是 true/false 也不是字符串；按 dry-run 处理，不会删任何东西。"
+                     % (raw_flag,))
+            self.dry_run = not is_live_flag(raw_flag)
+        else:
+            self.dry_run = bool(dry_run)
         self.up_mid = int(cfg.get("mid") or 0)
+        self.cutoff = 0
         self.totals = {"scanned": 0, "hit": 0, "deleted": 0, "would": 0,
                        "failed": 0, "reported": 0, "blocked": 0, "gone": 0}
 
@@ -913,12 +1029,32 @@ class Guard:
     def resolve_videos(self) -> List[Dict[str, Any]]:
         videos: List[Dict[str, Any]] = []
         seen = set()
-        for item in (self.cfg.get("videos") or []):
-            s = str(item).strip()
-            if not s or s in seen:
+        for raw in as_list(self.cfg.get("videos")):
+            s = str(raw).strip()
+            if not s:
                 continue
-            seen.add(s)
-            videos.append({"bvid": s, "aid": 0, "title": ""})
+            bvid, aid = "", 0
+            if re.fullmatch(r"BV[0-9A-Za-z]{10}", s):
+                bvid = s
+            elif re.fullmatch(r"\d+", s):
+                aid = int(s)
+            elif re.fullmatch(r"av\d+", s, re.I):
+                aid = int(s[2:])
+            else:
+                m = re.search(r"(BV[0-9A-Za-z]{10})", s) or re.search(r"av(\d+)", s, re.I)
+                if m:
+                    grp = m.group(0)
+                    if grp.lower().startswith("av"):
+                        aid = int(grp[2:])
+                    else:
+                        bvid = grp
+            key = bvid or ("av%d" % aid)
+            if not (bvid or aid) or key in seen:
+                if not (bvid or aid):
+                    warn("config.videos 里的 %r 既不是 bvid 也不是 aid，已跳过。" % s)
+                continue
+            seen.add(key)
+            videos.append({"bvid": bvid, "aid": aid, "title": ""})
         if self.cfg.get("auto_discover", True):
             if not self.up_mid:
                 warn("config.mid 为空且未登录，跳过自动发现投稿。")
@@ -963,6 +1099,7 @@ class Guard:
         max_pages = int(self.cfg.get("max_pages") or 8)
         lookback = int(self.cfg.get("lookback_hours") or 72) * 3600
         cutoff = now_ts() - lookback
+        self.cutoff = cutoff
         # 游标 = 上一轮扫描到的最老评论时间；下一轮只看比它新的评论
         cursor = int(rec.get("last_seen_ctime") or 0)
         first_run = cursor <= 0
@@ -976,12 +1113,13 @@ class Guard:
         scanned_ctimes: List[int] = []
         truncated = False
         use_wbi_main = False
+        wbi_mode = int(self.cfg.get("wbi_mode") or 3)
         offset = ""
 
         for pn in range(1, max_pages + 1):
             try:
                 if use_wbi_main:
-                    page = self.api.fetch_main_page_wbi(aid, offset=offset, ps=ps)
+                    page = self.api.fetch_main_page_wbi(aid, offset=offset, ps=ps, mode=wbi_mode)
                     offset = page.get("next_offset") or ""
                 else:
                     page = self.api.fetch_main_page(aid, pn=pn, ps=ps, sort=0)
@@ -990,7 +1128,7 @@ class Guard:
                 use_wbi_main, offset = True, ""
                 if pn == 1:
                     try:
-                        page = self.api.fetch_main_page_wbi(aid, offset="", ps=ps)
+                        page = self.api.fetch_main_page_wbi(aid, offset="", ps=ps, mode=wbi_mode)
                         offset = page.get("next_offset") or ""
                     except BiliError as e2:
                         warn("备用通道也失败：%s，本视频本轮放弃。" % e2)
@@ -1003,6 +1141,20 @@ class Guard:
 
             stats["pages"] += 1
             replies = page.get("replies") or []
+
+            # 老接口对未登录/被风控的请求会给 code=0 + 空列表，这里自适应切到
+            # 前端在用的 wbi/main，避免「视频明明有几十万评论却扫到 0 条」
+            if pn == 1 and not replies and not use_wbi_main:
+                try:
+                    alt = self.api.fetch_main_page_wbi(aid, offset="", ps=ps, mode=wbi_mode)
+                except BiliError as e:
+                    warn("wbi/main 通道也不可用：%s" % e)
+                    alt = None
+                if alt and alt.get("replies"):
+                    log("  老接口返回空评论，已切换 wbi/main 通道。")
+                    use_wbi_main, offset = True, alt.get("next_offset") or ""
+                    page, replies = alt, alt["replies"]
+
             if not replies:
                 break
 
@@ -1030,16 +1182,19 @@ class Guard:
 
         for rv in main_views:
             key = bvid or ("av%d" % aid)
-            # 先扫楼中楼（主楼处理完会被标记，之后就会被跳过）
-            if (self.cfg.get("include_sub_replies", True) and rv.rcount > 0
-                    and not self.state.is_handled(key, rv.rpid)):
-                self._scan_sub(rv, aid, bvid, stats)
-            self._process(rv, aid, bvid, rec, stats, dup)
+            # 先扫楼中楼（主楼处理完会被标记，之后就会被跳过）；
+            # 主楼删除失败时仍然扫，否则这棵子树会被永久跳过
+            if self.cfg.get("include_sub_replies", True) and rv.rcount > 0:
+                act = self.state.handled_action(key, rv.rpid)
+                if act not in ("deleted", "gone", "gave_up"):
+                    self._scan_sub(rv, aid, bvid, stats)
+            self._process(rv, aid, bvid, stats, dup)
 
         if truncated:
             warn("  评论量大，翻满 %d 页仍未追平；建议调大 max_pages 或缩短轮询间隔。" % max_pages)
-        elif scanned_ctimes:
-            # 只有完整追平时才推进游标，截断时保持旧游标，下轮重来，避免漏删
+        elif scanned_ctimes and (not use_wbi_main or wbi_mode == 2):
+            # 只有完整追平、且排序确定是按时间时才推进游标；
+            # 截断或排序不确定（mode!=2 可能是热度序）时保持旧游标，下轮重来，避免漏扫
             rec["last_seen_ctime"] = min(scanned_ctimes)
 
         log("  页数 %(pages)d / 扫描 %(scanned)d / 命中 %(hit)d / 删除 %(deleted)d / 待删 %(would)d / "
@@ -1079,13 +1234,16 @@ class Guard:
             return
         dup = duplicate_index(views, int(self.cfg.get("duplicate_min_len") or 12))
         for v in views:
-            self._process(v, aid, bvid, self.state.video(bvid or ("av%d" % aid)), stats, dup)
+            self._process(v, aid, bvid, stats, dup)
 
     # -- 单条裁定 + 处置 ---------------------------------------------------
-    def _process(self, v: ReplyView, aid: int, bvid: str, rec: Dict[str, Any],
+    def _process(self, v: ReplyView, aid: int, bvid: str,
                  stats: Dict[str, int], dup: Dict[str, int]) -> None:
         key = bvid or ("av%d" % aid)
         if self.state.is_handled(key, v.rpid):
+            return
+        # 超出回溯窗口的历史评论不处理（否则 lookback_hours 形同虚设）
+        if self.cutoff and v.ctime and v.ctime < self.cutoff:
             return
         stats["scanned"] += 1
         vt = judge(v, self.cfg, up_mid=self.up_mid, dup_counts=dup)
@@ -1099,8 +1257,19 @@ class Guard:
             stats["reported"] = stats.get("reported", 0) + 1
         if extra.get("blocked"):
             stats["blocked"] = stats.get("blocked", 0) + 1
-        self.state.mark(key, v.rpid, v.ctime, action)
-        if action in ("deleted", "would"):
+
+        if action in ("deleted", "gone"):
+            self.state.mark(key, v.rpid, v.ctime, action)
+        elif action == "failed":
+            # 失败了不记 handled，下一轮重试；连续 3 次不行就放弃，免得死循环打接口
+            fails = self.state.note_fail(key, v.rpid)
+            if fails >= 3:
+                self.state.mark(key, v.rpid, v.ctime, "gave_up")
+                warn("  放弃重试 rpid=%s（连续失败 %d 次）" % (v.rpid, fails))
+        # dry-run 的 would / 失败都不写 handled：
+        # 否则「先体检一天再开删」会一条都删不掉
+
+        if action == "deleted":
             self.state.bump_hit(key, v.mid)
 
     def _sleep_gap(self, scale: float = 1.0) -> None:
@@ -1110,7 +1279,7 @@ class Guard:
 
     def _dispose(self, v: ReplyView, vt: Verdict, aid: int, key: str) -> Tuple[str, Dict[str, Any]]:
         extra: Dict[str, Any] = {"reported": False, "blocked": False}
-        reason_label = vt.rules[0] if (vt.hard and vt.rules) else ",".join(vt.rules[:2])
+        reason_label = (vt.rules[0] if (vt.hard and vt.rules) else ",".join(vt.rules[:2])) or "-"
 
         if self.dry_run:
             log("  [DRY] 命中 %s | score=%d | %s" % (reason_label, vt.score, v.brief(60)))
@@ -1119,7 +1288,7 @@ class Guard:
                             score=vt.score, dry_run=True)
             return "would", extra
 
-        # 1) 先举报（举报要求评论还在），失败不影响删除
+        # 1) 先举报（举报要求评论还在），失败不影响删除，但要落盘
         if self.cfg.get("report", False):
             try:
                 self._sleep_gap(1.5)
@@ -1130,19 +1299,23 @@ class Guard:
             except BiliError as e:
                 warn("举报失败 rpid=%s：%s" % (v.rpid, e))
                 extra["report_error"] = str(e)
+                self.state.incr("report_failed", 1)
+                self.events.add(action="report_failed", aid=aid, rpid=v.rpid, mid=v.mid,
+                                uname=v.uname, rules=vt.rules, score=vt.score,
+                                code=e.code, error=e.message)
 
         # 2) 删除
         try:
             self.api.delete_reply(aid, v.rpid)
         except BiliError as e:
-            if e.code in (-404, 12002, 12022):
+            if e.code == -404:
                 self.events.add(action="already_gone", aid=aid, rpid=v.rpid, mid=v.mid,
                                 uname=v.uname, message=v.message, rules=vt.rules, score=vt.score)
                 return "gone", extra
             warn("删除失败 rpid=%s：%s" % (v.rpid, e))
             self.events.add(action="delete_failed", aid=aid, rpid=v.rpid, mid=v.mid,
                             uname=v.uname, message=v.message, rules=vt.rules,
-                            score=vt.score, error=str(e))
+                            score=vt.score, code=e.code, error=e.message)
             return "failed", extra
 
         self.state.incr("deleted", 1)
@@ -1154,7 +1327,8 @@ class Guard:
         # 3) 同一账号反复命中 -> 拉黑（第二层：让他以后根本发不出来）
         if self.cfg.get("auto_block", False) and v.mid:
             need = max(1, int(self.cfg.get("block_after_hits") or 3))
-            hits = self.state.hit_count(key, v.mid)
+            # 当前这条还没计入 hit_count（bump 在 _process 里），所以要 +1
+            hits = self.state.hit_count(key, v.mid) + 1
             if hits >= need and str(v.mid) not in self.state.data.get("blocked_mids", {}):
                 try:
                     self._sleep_gap(1.2)
@@ -1182,11 +1356,15 @@ class Guard:
                 self.scan_video(item)
             except KeyboardInterrupt:
                 raise
+            except SystemExit:
+                raise
             except Exception as e:  # 单视频出错不影响其它视频
-                warn("扫描 %s 出错：%r" % (item.get("bvid"), e))
+                warn("扫描 %s 出错：%r" % (item.get("bvid") or item.get("aid"), e))
             finally:
                 self.state.save()
         self.state.save()
+        if getattr(self.api, "auth_failed", False) or getattr(getattr(self.api, "http", None), "auth_failed", False):
+            raise SystemExit("Cookie 已失效（-101），请重新登录 B 站并更新 config.json 的 cookie。")
         log("本轮汇总：%s" % json.dumps(self.totals, ensure_ascii=False))
         return self.totals
 
@@ -1298,7 +1476,7 @@ def load_config(path: str) -> Dict[str, Any]:
     raw = load_json(path, None)
     if raw is None:
         raise SystemExit(
-            "找不到配置文件 %s。先运行：python dfy_guard.py init" % path
+            "找不到配置文件 %s。先运行：python fxxk_off_dfy.py init" % path
         )
     cfg = merge_config(raw)
     # 相对路径统一按配置文件所在目录解析，避免换个目录启动就把 state/日志写到别处
@@ -1324,8 +1502,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     print("下一步：")
     print("  1) 打开 https://www.bilibili.com 并登录，F12 → 网络 → 任意 api 请求 → 复制整条 Cookie")
     print("  2) 填进 %s 的 cookie 字段（必须有 SESSDATA 和 bili_jct）" % os.path.basename(path))
-    print("  3) 跑一次体检：python dfy_guard.py check     （只看不删）")
-    print("  4) 确认无误后把 dry_run 改成 false，再：python dfy_guard.py run")
+    print("  3) 跑一次体检：python fxxk_off_dfy.py check     （只看不删）")
+    print("  4) 确认无误后把 dry_run 改成 false，再：python fxxk_off_dfy.py run")
     return 0
 
 
@@ -1359,20 +1537,43 @@ def _apply_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str,
     return cfg
 
 
+def validate_cfg(cfg: Dict[str, Any]) -> None:
+    tier = str(cfg.get("tier") or "standard")
+    if tier not in TIER_FLAGS:
+        raise SystemExit("config.tier=%r 不认识，可选：cup / standard / kill" % tier)
+    for key, low, high in (("threshold", 1, 1000), ("max_pages", 1, 200),
+                           ("page_size", 1, 20), ("interval_seconds", 20, 86400),
+                           ("sub_reply_pages", 1, 50), ("lookback_hours", 1, 24 * 365)):
+        try:
+            val = int(cfg.get(key))
+        except (TypeError, ValueError):
+            raise SystemExit("config.%s 必须是整数，当前是 %r" % (key, cfg.get(key)))
+        if not (low <= val <= high):
+            raise SystemExit("config.%s=%s 超出合理范围 %s~%s" % (key, val, low, high))
+    if cfg.get("report") and int(cfg.get("report_reason") or 0) not in REPORT_REASONS:
+        warn("report_reason=%r 不在已知枚举里，举报可能返回参数错误。" % cfg.get("report_reason"))
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     cfg = _apply_overrides(load_config(args.config), args)
+    validate_cfg(cfg)
     cfg["dry_run"] = True
     import tempfile
-    tmp_state = os.path.join(tempfile.gettempdir(), "dfy_guard_check_%d.json" % os.getpid())
+    tmp_dir = tempfile.gettempdir()
+    tmp_state = os.path.join(tmp_dir, "fxxk_off_dfy_check_state_%d.json" % os.getpid())
+    tmp_log = os.path.join(tmp_dir, "fxxk_off_dfy_check_events_%d.jsonl" % os.getpid())
+    # 体检不能污染生产 state / events：events.jsonl 是事后恢复的唯一依据
     cfg["state_file"] = tmp_state
+    cfg["log_file"] = tmp_log
     guard = Guard(cfg, dry_run=True)
     try:
+        guard.api.http.preflight()
         me = guard.api.whoami()
         guard.up_mid = int(me["mid"])
         print("体检模式：只打印命中结果，不会删除任何评论。账号 %s(mid=%s)，档位 %s，阈值 %s"
               % (me["uname"], me["mid"], cfg.get("tier"), cfg.get("threshold")))
         guard.run_once()
-        print("\n本次命中明细已写入 %s（action=would_delete）。" % guard.events.path)
+        print("\n本次命中明细已写入 %s（action=would_delete），生产 events.jsonl 未被改动。" % tmp_log)
         print("确认规则没问题后，把 config.json 的 dry_run 改为 false 再运行 run。")
     finally:
         try:
@@ -1385,9 +1586,11 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = _apply_overrides(load_config(args.config), args)
+    validate_cfg(cfg)
     if args.live:
         cfg["dry_run"] = False
     guard = Guard(cfg)
+    guard.api.http.preflight()
     me = guard.api.whoami()
     guard.up_mid = int(me["mid"])
     mode = "DRY-RUN（只记录不删除）" if guard.dry_run else "LIVE（命中即删除）"
@@ -1417,7 +1620,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="dfy_guard.py",
+        prog="fxxk_off_dfy.py",
         description="B站「大肥鱼 / AI 机器人」评论清理器：监控自己视频的评论，命中即删（可选举报、拉黑）。",
         epilog="先 check 后 run。第一次务必保持 dry_run=true。",
     )
@@ -1464,7 +1667,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not getattr(args, "func", None):
         parser.print_help()
         return 0
-    print("dfy_guard v%s" % VERSION)
+    print("fxxk-off-dfy v%s" % VERSION)
     return int(args.func(args) or 0)
 
 

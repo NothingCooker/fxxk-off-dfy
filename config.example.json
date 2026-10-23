@@ -14,6 +14,7 @@
   "page_size": 20,
   "include_sub_replies": true,
   "sub_reply_pages": 2,
+  "wbi_mode": 2,
 
   "dry_run": true,
   "report": false,

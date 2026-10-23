@@ -1,4 +1,4 @@
-# dfy_guard —— B站「大肥鱼」机器人评论清理器（服务端版）
+# fxxk-off-dfy —— B站「大肥鱼」机器人评论清理器（服务端版）
 
 > 油猴脚本让你自己看不见机器人，**这个脚本让所有人看不见**。
 >
@@ -63,7 +63,7 @@
 
 ### 和参考项目的区别
 
-| | bilibili-dafeiyu-blocker | Creel 鱼篓 | dfy_guard（本项目） |
+| | bilibili-dafeiyu-blocker | Creel 鱼篓 | fxxk-off-dfy（本项目） |
 |---|---|---|---|
 | 生效范围 | 只有你本机浏览器 | 只有你本机浏览器 | 服务端，所有访客 |
 | 机器人的评论还在吗 | 在，别人看得到 | 在 | **被删除** |
@@ -89,7 +89,7 @@ python --version
 ### 1. 生成配置
 
 ```bash
-python dfy_guard.py init
+python fxxk_off_dfy.py init
 ```
 
 生成 `config.json`，里面有 `cookie`、`mid`、`videos` 三个字段要你填。
@@ -99,7 +99,7 @@ python dfy_guard.py init
 见下一节。填完先验一下：
 
 ```bash
-python dfy_guard.py whoami
+python fxxk_off_dfy.py whoami
 ```
 
 正常输出你的昵称、mid、最近投稿列表。报 `code=-101` 就是 Cookie 没抄全或过期了。
@@ -107,7 +107,7 @@ python dfy_guard.py whoami
 ### 3. 体检（只打印，不删除）
 
 ```bash
-python dfy_guard.py check
+python fxxk_off_dfy.py check
 ```
 
 输出类似：
@@ -125,13 +125,13 @@ python dfy_guard.py check
 
 ```bash
 # 方式 A：改 config.json 的 dry_run 为 false，然后
-python dfy_guard.py run
+python fxxk_off_dfy.py run
 
 # 方式 B：命令行强制 live，只跑一轮
-python dfy_guard.py run --once --live
+python fxxk_off_dfy.py run --once --live
 
 # 想连举报一起做
-python dfy_guard.py run --live --report
+python fxxk_off_dfy.py run --live --report
 ```
 
 `run` 会一直循环（默认 120 秒一轮，带随机抖动）。Ctrl+C 退出。
@@ -164,13 +164,27 @@ python dfy_guard.py run --live --report
 
 三档，`config.json` 的 `tier`：
 
-| 档位 | 硬命中 | 软信号 | 误杀风险 |
+| 档位 | 硬命中（所有档位一致） | 软信号 | 误杀风险 |
 |---|---|---|---|
-| `cup`（小杯） | 昵称含鱼/鲸、品牌词、Prompt 残留、数值矩阵 | 几乎不用 | 极低，只删铁证 |
-| `standard`（默认） | 同上 | + `@`、总结模板、超长文、低等级 | 低 |
+| `cup`（小杯） | 昵称含鱼/鲸、品牌词、Prompt 残留、数值矩阵、三个以上账号同文 | 不参与打分 | 极低，只删铁证 |
+| `standard`（默认） | 同上 | + 软词（主人/喵…）、`@`、总结模板、超长文 | 低 |
 | `kill`（杀戮） | 同上 | + 全角标点、破折号、直角引号、正文单字「鱼/鲸」 | 明显上升，真人长评也可能中招 |
 
-默认 `threshold = 60`。软信号要攒到 60 才判定，单项永远不会触发（比如真人 `@` 好友只有 20 分）。
+默认 `threshold = 60`。软信号要攒到 60 才判定，而且**每条软规则自身都够不到 60**：
+
+| 软信号 | 分值 | 说明 |
+|---|---|---|
+| `at` | 20 | 正文（剥掉「回复 @xx :」前缀后）出现 @ |
+| `summary` | 40（封顶） | 命中 ≥2 个总结模板词，再多也只有 40 |
+| `long` | 15 | 正文 ≥300 字 |
+| `char` | 30 | 正文出现单字「鱼/鲸」（仅 `kill` 档） |
+| 全角标点 / 破折号 / 直角引号 | 各 15 | 仅 `kill` 档，可叠加 |
+| `ai_name` | 25 | 昵称带 AI/Bot/GPT/助手 |
+| `low_level` | 10 | Lv0~1 且正文 ≥30 字 |
+| `soft_words` | 22~40 | 主人/喵/本喵…，按词长降序匹配，不重复计分 |
+
+所以「真人 @ 一下」只有 20 分、「真人写了段总结」只有 40 分，都不会被删；
+至少要「@ + 总结」或「@ + 单字鱼 + 标点」这种组合才会过线。
 
 想看每条为什么命中，看日志里的 `rules` 字段：
 
@@ -206,37 +220,45 @@ at+20 / summary+40 / long+15 / char+30 ...
 |---|---|---|
 | `cookie` | `""` | 登录态 Cookie，**必填** |
 | `mid` | `0` | 你的 UID，留 0 会用登录账号自动填 |
-| `videos` | `[]` | 手动指定要监控的 bvid 列表，如 `["BV1xx411c7mD"]` |
+| `videos` | `[]` | 手动指定要监控的 bvid（`BV...`）或 aid 列表，如 `["BV1xx411c7mD"]` |
 | `auto_discover` | `true` | 自动拉自己最近投稿（`discover_pages` 页，每页 30） |
 | `interval_seconds` | `120` | 轮询间隔（有 ±10% 随机抖动） |
-| `lookback_hours` | `72` | 只处理这个时间范围内的评论；首次跑想清历史可以调大 |
+| `lookback_hours` | `72` | 只处理这个时间范围内的评论，**超出窗口的评论不会被删**；想清历史调到 `720` |
 | `max_pages` | `8` | 每个视频每轮最多翻几页主楼（每页 20 条 = 160 条） |
+| `page_size` | `20` | 每页条数，接口上限就是 20，写大了会自动夹到 20 |
 | `include_sub_replies` | `true` | 是否扫楼中楼 |
-| `sub_reply_pages` | `2` | 每条主楼最多翻几页楼中楼 |
-| `dry_run` | `true` | 只记录不删除。**确认无误会后再改 false** |
-| `report` | `false` | 命中后一并举报 |
+| `sub_reply_pages` | `2` | 每条主楼最多看几页楼中楼（取**最后**几页，因为楼中楼按时间正序给） |
+| `wbi_mode` | `2` | `wbi/main` 备用通道的排序模式，`2`=按时间（默认）；排序不确定时脚本不会推进游标 |
+| `dry_run` | `true` | 只记录不删除。**确认无误会后再改 false**（写成 `null`/`""`/`0` 也一律按 dry-run 处理） |
+| `report` | `false` | 命中后一并举报（先举报再删除） |
 | `report_reason` | `8` | 举报理由，见下节 |
 | `auto_block` | `false` | 同一账号累计命中 `block_after_hits` 次后拉黑 |
 | `block_after_hits` | `3` | 拉黑阈值 |
 | `skip_pinned` | `true` | 跳过置顶评论 |
 | `skip_self` | `true` | 跳过 UP 主自己的评论 |
-| `threshold` | `60` | 软信号阈值 |
-| `tier` | `"standard"` | `cup` / `standard` / `kill` |
+| `threshold` | `60` | 软信号阈值（只有软信号会累加，单条软信号最多 40 分，永远不够） |
+| `tier` | `"standard"` | `cup` / `standard` / `kill`，写错会直接报错退出，不会静默降级 |
+| `numeric_matrix_min` | `3` | 一条评论里几个精确百分比/倍数算「洗稿矩阵」 |
+| `summary_min_hits` | `2` | 命中几个总结模板词开始计分 |
+| `long_text_len` | `300` | 超长评论阈值（加 15 分） |
+| `duplicate_min_len` | `12` | 重复文本聚类的最短长度 |
 | `request_min_delay` / `request_max_delay` | `0.8` / `1.6` | 请求间隔（秒），别调到 0 |
-| `state_file` / `log_file` | `state.json` / `events.jsonl` | 状态与审计日志路径 |
+| `timeout` | `20` | 单请求超时（秒） |
+| `max_retries` | `3` | 失败后的**额外**重试次数（总尝试 = 1 + 3） |
+| `state_file` / `log_file` | `state.json` / `events.jsonl` | 状态与审计日志路径；相对路径按配置文件所在目录解析 |
 
 ---
 
 ## 命令
 
 ```bash
-python dfy_guard.py init       [--cookie "..."] [--force]
-python dfy_guard.py whoami
-python dfy_guard.py check      [--video BV1xx BV2yy] [--tier cup] [--threshold 80]
-python dfy_guard.py run        [--once] [--live] [--report] [--block]
+python fxxk_off_dfy.py init       [--cookie "..."] [--force]
+python fxxk_off_dfy.py whoami
+python fxxk_off_dfy.py check      [--video BV1xx BV2yy] [--tier cup] [--threshold 80]
+python fxxk_off_dfy.py run        [--once] [--live] [--report] [--block]
                                [--interval 120] [--tier kill] [--threshold 50] [--video BV1xx]
-python dfy_guard.py stats
-python dfy_guard.py selftest    # 离线规则自测，不联网、不要 Cookie
+python fxxk_off_dfy.py stats
+python fxxk_off_dfy.py selftest    # 离线规则自测，不联网、不要 Cookie
 ```
 
 `selftest` 会跑 16 个正负样本 + wbi 签名校验，改完规则先跑它：
@@ -265,12 +287,13 @@ python tests/test_offline.py
 `x/v2/reply/report` 的 `reason` 是整数枚举，脚本内置映射：
 
 ```python
-1  垃圾广告      2  人身攻击     3  色情低俗    4  引战
+1  垃圾广告      2  色情低俗     3  人身攻击    4  引战
 5  剧透          6  政治敏感     7  违法违禁    8  垃圾信息/刷屏   ← 默认
 ```
 
-机器人评论用 `8` 最贴切。如果举报接口返回参数错误，换成 `1` 试；
-`events.jsonl` 里 `action=delete_failed` 或 `report_error` 会记下接口原话。
+机器人评论用 `8` 最贴切。这个枚举是社区整理值，B 站改过几次；
+如果举报接口返回参数错误（`code=-400`），换成 `1` 再试一条，用 `events.jsonl` 里
+`action=report_failed` 记录的 `code` 判断。举报失败不会影响删除。
 
 举报成功率取决于你的理由是否成立，别指望必中。**删除是主手段，举报是补刀。**
 
@@ -303,28 +326,28 @@ Windows 计划任务（每 5 分钟跑一轮，不需要常开窗口）：
 ```powershell
 # 管理员 PowerShell 里执行
 $py = (Get-Command python).Source
-$dir = "D:\path\to\bili-dfy-guard"
-$act = New-ScheduledTaskAction -Execute $py -Argument "`"$dir\dfy_guard.py`" run --once --live" -WorkingDirectory $dir
+$dir = "D:\path\to\fxxk-off-dfy"
+$act = New-ScheduledTaskAction -Execute $py -Argument "`"$dir\fxxk_off_dfy.py`" run --once --live" -WorkingDirectory $dir
 $trg = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
-Register-ScheduledTask -TaskName "dfy_guard" -Action $act -Trigger $trg -Description "B站大肥鱼评论清理"
+Register-ScheduledTask -TaskName "fxxk-off-dfy" -Action $act -Trigger $trg -Description "B站大肥鱼评论清理"
 ```
 
 Linux / 服务器（systemd 或直接 nohup）：
 
 ```bash
-nohup python3 dfy_guard.py run --live >> run.log 2>&1 &
+nohup python3 fxxk_off_dfy.py run --live >> run.log 2>&1 &
 ```
 
 开机自启、崩溃重启用 systemd：
 
 ```ini
 [Unit]
-Description=dfy_guard
+Description=fxxk-off-dfy
 After=network-online.target
 
 [Service]
-WorkingDirectory=/opt/bili-dfy-guard
-ExecStart=/usr/bin/python3 dfy_guard.py run --live
+WorkingDirectory=/opt/fxxk-off-dfy
+ExecStart=/usr/bin/python3 fxxk_off_dfy.py run --live
 Restart=always
 RestartSec=30
 
@@ -350,8 +373,9 @@ WantedBy=multi-user.target
 |---|---|
 | `would_delete` | dry-run 命中，实际没删 |
 | `deleted` | 已删除 |
-| `already_gone` | 评论已经没了（作者删了/已被系统处理） |
-| `delete_failed` | 删除失败，看 `error` |
+| `already_gone` | 评论已经没了（作者删了/已被系统处理），记入 handled 不再重试 |
+| `delete_failed` | 删除失败，带 `code`/`error`；下轮会重试，连续 3 次才放弃 |
+| `report_failed` | 举报失败，带 `code`/`error`（不影响删除） |
 | `blocked` | 已拉黑账号 |
 
 **`state.json`**：每个视频处理到哪条、已拉黑名单、累计统计。想重新全量扫描，删掉它即可
@@ -380,6 +404,12 @@ WantedBy=multi-user.target
 脚本从最新评论往回翻，翻满 `max_pages`（默认 8 页 = 160 条）还没追到上次处理位置时，
 日志会提示「翻满 N 页仍未追平」，此时**不会**推进游标，下一轮重来。
 把 `max_pages` 调到 20~30，或者把 `interval_seconds` 调小，直到日志不再出现这条提示。
+
+**Q：评论明明很多，脚本却一条都没扫到？**
+B 站老接口 `x/v2/reply` 在未登录或被风控时会返回 `code=0` + 空列表（不是报错）。
+脚本检测到「第一页空」会自动切到前端在用的 `x/v2/reply/wbi/main`（带 WBI 签名）再试一次，
+日志里会出现「老接口返回空评论，已切换 wbi/main 通道」。
+两个通道都空，才说明评论区真的没有评论，或者 Cookie 已经失效（先跑 `whoami`）。
 
 **Q：`-352` 一直不退怎么办？**
 换回浏览器复制的新 Cookie（带上 `bili_ticket`、`buvid3`），把 `interval_seconds` 调到 300 以上，

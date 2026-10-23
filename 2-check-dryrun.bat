@@ -3,7 +3,7 @@ chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
 echo ==========================================
-echo  dfy_guard - 体检模式（只打印，不删除）
+echo  fxxk-off-dfy - 体检模式（只打印，不删除）
 echo ==========================================
-python dfy_guard.py check
+python fxxk_off_dfy.py check
 pause

@@ -17,12 +17,16 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import dfy_guard as g  # noqa: E402
+import fxxk_off_dfy as g  # noqa: E402
+
+# 用「刚刚」的时间，否则会被 lookback_hours 的窗口过滤掉
+NOW = g.now_ts()
 
 
-def reply(rpid, mid, uname, message, ctime=1700000000, rcount=0, top=False, level=4):
+def reply(rpid, mid, uname, message, ctime=None, rcount=0, top=False, level=4):
     return {
-        "rpid": rpid, "mid": mid, "ctime": ctime, "like": 0, "rcount": rcount,
+        "rpid": rpid, "mid": mid, "ctime": ctime if ctime is not None else NOW - 60,
+        "like": 0, "rcount": rcount,
         "content": {"message": message},
         "member": {"uname": uname, "level_info": {"current_level": level}},
         "reply_control": {"is_up_top": top},
@@ -86,7 +90,7 @@ class GuardTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="dfy_test_")
         self.cfg = g.merge_config({
-            "videos": ["BV1test"],
+            "videos": ["BV1xx411c7mD"],
             "auto_discover": False,
             "mid": 999,
             "dry_run": True,
@@ -123,7 +127,8 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(api.deleted, [])
         self.assertEqual(totals["hit"], 1)
         self.assertEqual(totals["would"], 1)
-        logs = [json.loads(l) for l in open(self.cfg["log_file"], encoding="utf-8").read().splitlines()]
+        with open(self.cfg["log_file"], encoding="utf-8") as f:
+            logs = [json.loads(line) for line in f.read().splitlines()]
         self.assertEqual(logs[0]["action"], "would_delete")
         self.assertEqual(logs[0]["rpid"], 1)
 
@@ -202,6 +207,73 @@ class GuardTest(unittest.TestCase):
         totals = guard.run_once()
         self.assertEqual(api.deleted, [])
         self.assertEqual(totals["hit"], 0)
+
+    # ---- 8. 回归：dry-run 之后切 live 必须还能删 ------------------------
+    def test_dry_then_live_still_deletes(self):
+        api = FakeAPI(main_pages=[page([
+            reply(1, 5001, "旅行者的大肥鱼", "本鲸来了"),
+        ])])
+        guard = self.make_guard(api, dry_run=True)
+        guard.run_once()
+        self.assertEqual(api.deleted, [])          # dry 不删
+        guard.dry_run = False                      # 切 live
+        guard.run_once()
+        self.assertEqual(api.deleted, [1])         # 仍然能删
+
+    # ---- 9. 回归：删除失败要重试，不能记成已处理 ------------------------
+    def test_failed_delete_is_retried(self):
+        api = FakeAPI(main_pages=[page([
+            reply(1, 5001, "旅行者的大肥鱼", "本鲸来了"),
+        ])], delete_error=g.BiliError(-500, "服务繁忙"))
+        guard = self.make_guard(api, dry_run=False)
+        guard.run_once()
+        self.assertEqual(guard.totals["failed"], 1)
+        api.delete_error = None
+        guard.run_once()
+        self.assertEqual(api.deleted, [1])
+
+    # ---- 10. 回归：超出回溯窗口的旧评论不处理 ---------------------------
+    def test_outside_lookback_is_ignored(self):
+        old = g.now_ts() - 30 * 24 * 3600
+        api = FakeAPI(main_pages=[page([
+            reply(1, 5001, "旅行者的大肥鱼", "本鲸来了", ctime=old),
+        ])])
+        guard = self.make_guard(api, dry_run=False, lookback_hours=1)
+        totals = guard.run_once()
+        self.assertEqual(api.deleted, [])
+        self.assertEqual(totals["scanned"], 0)
+
+    # ---- 11. 回归：dry_run 取值异常时必须 fail-safe 到 dry --------------
+    def test_dry_run_fail_safe(self):
+        for bad in (None, "", "yes", 0, 1, [], {}):
+            cfg = json.loads(json.dumps(self.cfg))
+            cfg["dry_run"] = bad
+            guard = g.Guard(cfg, api=FakeAPI(), dry_run=None)
+            self.assertTrue(guard.dry_run, "dry_run=%r 应该按 dry-run 处理" % (bad,))
+
+
+class JudgeRegressionTest(unittest.TestCase):
+    """规则引擎的回归用例（不涉及接口）。"""
+
+    def test_cup_tier_does_not_count_soft_words(self):
+        cfg = g.merge_config({"tier": "cup"})
+        v = g.reply_view(reply(1, 5001, "老王", "主人抱着本喵看视频"))
+        vt = g.judge(v, cfg, up_mid=999)
+        self.assertEqual(vt.score, 0)
+        self.assertFalse(vt.hit)
+
+    def test_summary_alone_cannot_reach_threshold(self):
+        cfg = g.merge_config({})
+        v = g.reply_view(reply(1, 5001, "老王", "首先这很好其次不错再次可以最后满意"))
+        vt = g.judge(v, cfg, up_mid=999)
+        self.assertEqual(vt.score, 40)
+        self.assertFalse(vt.hit)
+
+    def test_soft_words_no_double_count(self):
+        cfg = g.merge_config({"tier": "kill"})
+        v = g.reply_view(reply(1, 5001, "老王", "本喵"))
+        vt = g.judge(v, cfg, up_mid=999)
+        self.assertEqual(vt.score, 40)   # 只算「本喵+40」，不再叠加「喵+22」
 
 
 if __name__ == "__main__":
