@@ -249,6 +249,15 @@ PASS  真人 @ -> 不命中            expect=False got=False score=20  at+20
 17 个用例，失败 0 个。
 ```
 
+还有一组离线集成测试（假接口，验证「拉评论 → 判定 → 处置 → 落盘」全流程）：
+
+```bash
+python tests/test_offline.py
+```
+
+覆盖：dry-run 不删、live 删除后二轮跳过、楼中楼扫描、评论已消失、先举报后删除、
+反复命中拉黑、置顶与白名单。改完代码先跑这两个，都不用 Cookie。
+
 ---
 
 ## 举报理由
@@ -366,6 +375,11 @@ WantedBy=multi-user.target
 **Q：为什么 `check` 一条都没命中？**
 可能是评论区本来就干净，也可能是 `lookback_hours=72` 把历史评论排除了。
 调大到 `720` 再看；或者确认 `auto_discover` 拉到了你的稿件（`whoami` 会打印最近投稿）。
+
+**Q：评论区很热闹，一轮翻不完怎么办？**
+脚本从最新评论往回翻，翻满 `max_pages`（默认 8 页 = 160 条）还没追到上次处理位置时，
+日志会提示「翻满 N 页仍未追平」，此时**不会**推进游标，下一轮重来。
+把 `max_pages` 调到 20~30，或者把 `interval_seconds` 调小，直到日志不再出现这条提示。
 
 **Q：`-352` 一直不退怎么办？**
 换回浏览器复制的新 Cookie（带上 `bili_ticket`、`buvid3`），把 `interval_seconds` 调到 300 以上，

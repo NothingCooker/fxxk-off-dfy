@@ -443,6 +443,10 @@ class BiliAPI:
         except BiliError as e:
             if allow_anonymous:
                 return {}
+            if e.code == -101:
+                raise SystemExit(
+                    "Cookie 无效或已过期（-101）。重新登录 B 站 → F12 复制完整 Cookie（含 SESSDATA、bili_jct）。"
+                )
             raise SystemExit("nav 接口失败：%s" % e)
         data = payload.get("data") or {}
         if not data.get("isLogin"):
@@ -845,10 +849,9 @@ class State:
         return str(rpid) in self.video(key)["handled"]
 
     def mark(self, key: str, rpid: int, ctime: int, action: str) -> None:
+        """记录已处置的评论。注意：不碰 last_seen_ctime（游标由 scan_video 统一推进）。"""
         rec = self.video(key)
         rec["handled"][str(rpid)] = {"ctime": int(ctime), "act": action, "at": now_ts()}
-        if ctime > rec["last_seen_ctime"]:
-            rec["last_seen_ctime"] = int(ctime)
         if len(rec["handled"]) > self.HANDLED_CAP:
             items = sorted(rec["handled"].items(), key=lambda kv: kv[1].get("ctime", 0))
             rec["handled"] = dict(items[-self.HANDLED_CAP:])
@@ -960,14 +963,18 @@ class Guard:
         max_pages = int(self.cfg.get("max_pages") or 8)
         lookback = int(self.cfg.get("lookback_hours") or 72) * 3600
         cutoff = now_ts() - lookback
-        first_run = not rec.get("handled")
+        # 游标 = 上一轮扫描到的最老评论时间；下一轮只看比它新的评论
+        cursor = int(rec.get("last_seen_ctime") or 0)
+        first_run = cursor <= 0
+        stop_at = cutoff if first_run else cursor
 
         log("扫描 %s  %s" % (bvid or ("av%d" % aid), truncate(title, 40)))
         stats = {"scanned": 0, "hit": 0, "deleted": 0, "would": 0, "failed": 0,
                  "reported": 0, "blocked": 0, "gone": 0, "pages": 0}
 
         main_views: List[ReplyView] = []
-        stop_early = False
+        scanned_ctimes: List[int] = []
+        truncated = False
         use_wbi_main = False
         offset = ""
 
@@ -999,18 +1006,24 @@ class Guard:
             if not replies:
                 break
 
+            page_ctimes = [int(r.get("ctime") or 0) for r in replies if r.get("ctime")]
+            if page_ctimes:
+                scanned_ctimes.extend(page_ctimes)
+
             for raw in replies:
                 rv = reply_view(raw)
                 if not rv.rpid:
                     continue
                 main_views.append(rv)
 
-            oldest = min((reply_view(r).ctime for r in replies), default=now_ts())
-            if page.get("is_end") or (oldest and oldest < cutoff and not first_run):
-                stop_early = True
+            if page.get("is_end"):
                 break
-            if oldest and oldest < cutoff:
+            # 已经翻到上一轮处理位置（或首次运行的回溯窗口边界）就收手
+            if page_ctimes and min(page_ctimes) <= stop_at:
                 break
+        else:
+            # for 循环正常跑完 = 翻满了 max_pages 还没追平
+            truncated = True
 
         # 同屏重复文本聚类（洗稿矩阵）
         dup = duplicate_index(main_views, int(self.cfg.get("duplicate_min_len") or 12))
@@ -1023,8 +1036,12 @@ class Guard:
                 self._scan_sub(rv, aid, bvid, stats)
             self._process(rv, aid, bvid, rec, stats, dup)
 
-        if stop_early:
-            log("  （已追到上次处理位置或超出回溯窗口，本轮停止翻页）")
+        if truncated:
+            warn("  评论量大，翻满 %d 页仍未追平；建议调大 max_pages 或缩短轮询间隔。" % max_pages)
+        elif scanned_ctimes:
+            # 只有完整追平时才推进游标，截断时保持旧游标，下轮重来，避免漏删
+            rec["last_seen_ctime"] = min(scanned_ctimes)
+
         log("  页数 %(pages)d / 扫描 %(scanned)d / 命中 %(hit)d / 删除 %(deleted)d / 待删 %(would)d / "
             "失败 %(failed)d / 举报 %(reported)d / 拉黑 %(blocked)d" % stats)
         for k in ("scanned", "hit", "deleted", "would", "failed", "reported", "blocked", "gone"):
@@ -1032,17 +1049,31 @@ class Guard:
         return stats
 
     def _scan_sub(self, parent: ReplyView, aid: int, bvid: str, stats: Dict[str, int]) -> None:
-        pages = int(self.cfg.get("sub_reply_pages") or 2)
+        """楼中楼默认按时间正序返回（旧→新），所以只翻最后几页才是最新回复。"""
+        ps = 20
+        keep = max(1, int(self.cfg.get("sub_reply_pages") or 2))
+        try:
+            first = self.api.fetch_sub_page(aid, parent.rpid, pn=1, ps=ps)
+        except BiliError as e:
+            warn("拉楼中楼失败 rpid=%s：%s" % (parent.rpid, e))
+            return
+        count = int(first.get("count") or parent.rcount or 0)
+        total_pages = max(1, (count + ps - 1) // ps)
+        start_page = max(1, total_pages - keep + 1)
+
         views: List[ReplyView] = []
-        for pn in range(1, pages + 1):
-            try:
-                page = self.api.fetch_sub_page(aid, parent.rpid, pn=pn)
-            except BiliError as e:
-                warn("拉楼中楼失败 rpid=%s：%s" % (parent.rpid, e))
-                break
+        for pn in range(start_page, total_pages + 1):
+            if pn == 1:
+                page = first
+            else:
+                try:
+                    page = self.api.fetch_sub_page(aid, parent.rpid, pn=pn, ps=ps)
+                except BiliError as e:
+                    warn("拉楼中楼失败 rpid=%s 第 %d 页：%s" % (parent.rpid, pn, e))
+                    break
             for raw in (page.get("replies") or []):
                 views.append(reply_view(raw, is_sub=True, root=parent.rpid))
-            if page.get("is_end"):
+            if page.get("is_end") and pn >= total_pages - 1:
                 break
         if not views:
             return
@@ -1072,6 +1103,11 @@ class Guard:
         if action in ("deleted", "would"):
             self.state.bump_hit(key, v.mid)
 
+    def _sleep_gap(self, scale: float = 1.0) -> None:
+        lo = float(self.cfg.get("request_min_delay") or 0.8) * scale
+        hi = float(self.cfg.get("request_max_delay") or 1.6) * scale
+        jitter_sleep(lo, hi)
+
     def _dispose(self, v: ReplyView, vt: Verdict, aid: int, key: str) -> Tuple[str, Dict[str, Any]]:
         extra: Dict[str, Any] = {"reported": False, "blocked": False}
         reason_label = vt.rules[0] if (vt.hard and vt.rules) else ",".join(vt.rules[:2])
@@ -1086,7 +1122,7 @@ class Guard:
         # 1) 先举报（举报要求评论还在），失败不影响删除
         if self.cfg.get("report", False):
             try:
-                jitter_sleep(1.2, 2.8)
+                self._sleep_gap(1.5)
                 self.api.report_reply(aid, v.rpid,
                                       int(self.cfg.get("report_reason") or DEFAULT_REPORT_REASON))
                 extra["reported"] = True
@@ -1121,7 +1157,7 @@ class Guard:
             hits = self.state.hit_count(key, v.mid)
             if hits >= need and str(v.mid) not in self.state.data.get("blocked_mids", {}):
                 try:
-                    jitter_sleep(1.0, 2.2)
+                    self._sleep_gap(1.2)
                     self.api.block_user(v.mid)
                     self.state.data.setdefault("blocked_mids", {})[str(v.mid)] = {
                         "at": now_ts(), "uname": v.uname, "hits": hits,
@@ -1249,9 +1285,11 @@ def selftest() -> int:
 # ---------------------------------------------------------------------------
 
 def ensure_utf8_stdio() -> None:
+    """控制台编码兜底：保留原编码（中文 Windows 是 GBK，能正常输出中文），
+    只把错误处理换成 replace，避免 emoji / 生僻字把整个程序打崩。"""
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+            stream.reconfigure(errors="replace")  # type: ignore[attr-defined]
         except Exception:
             pass
 
