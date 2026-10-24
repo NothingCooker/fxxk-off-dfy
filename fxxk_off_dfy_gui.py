@@ -69,6 +69,18 @@ class App(tk.Tk):
         self.busy = False
         self.me: Dict[str, Any] = {}
         self._cookie_value = ""
+        self._ui_log_path = os.path.join(os.path.dirname(core.DEFAULT_CONFIG), "gui.log")
+        try:
+            # 超过 2MB 轮转一次，避免日志无限长大
+            if os.path.getsize(self._ui_log_path) > 2 * 1024 * 1024:
+                os.replace(self._ui_log_path, self._ui_log_path + ".1")
+        except OSError:
+            pass
+        try:
+            # 界面日志落盘：关掉窗口也能回看，不再出现「日志一直是空的」
+            self._ui_log_fp = open(self._ui_log_path, "a", encoding="utf-8", buffering=1)
+        except OSError:
+            self._ui_log_fp = None
         self.video_rows: Dict[str, Dict[str, Any]] = {}
         self.video_checked: Dict[str, bool] = {}
         self.last_totals: Dict[str, int] = {}
@@ -99,7 +111,7 @@ class App(tk.Tk):
         cfg["_comment"] = "图形界面生成。Cookie 等价于账号密码，别提交到 git、别外发。"
         cfg["cookie"] = self._cookie_value.strip()
         cfg["tier"] = self.var_tier.get()
-        cfg["threshold"] = int(float(self.var_threshold.get()))
+        cfg["threshold"] = int(self.threshold_value)
         cfg["lookback_hours"] = int(self.var_lookback.get())
         cfg["max_pages"] = int(self.var_max_pages.get())
         cfg["interval_seconds"] = int(self.var_interval.get())
@@ -241,12 +253,14 @@ class App(tk.Tk):
             ttk.Radiobutton(r1, text=label, value=val, variable=self.var_tier,
                             command=self._on_tier).pack(side="left", padx=(8, 0))
         tk.Label(r1, text="   阈值", bg=CARD, fg=TEXT, font=FONT_BOLD).pack(side="left")
-        self.var_threshold = tk.DoubleVar(value=60)
-        ttk.Scale(r1, from_=10, to=100, variable=self.var_threshold, length=160,
-                  command=lambda _v: self.lbl_threshold.config(text=str(int(float(self.var_threshold.get()))))
-                  ).pack(side="left", padx=(6, 4))
+        # 不绑 DoubleVar：ttk.Scale 会把值量化到像素，绑变量会读回 59.x 这种脏值
+        self.threshold_value = 60
+        self.scale_threshold = ttk.Scale(r1, from_=10, to=100, length=160,
+                                         command=self._on_threshold_move)
+        self.scale_threshold.pack(side="left", padx=(6, 4))
         self.lbl_threshold = tk.Label(r1, text="60", bg=CARD, fg=DIM, font=FONT_SMALL, width=3)
         self.lbl_threshold.pack(side="left")
+        self.scale_threshold.set(60)
         tk.Label(r1, text="回溯", bg=CARD, fg=TEXT, font=FONT_BOLD).pack(side="left", padx=(14, 4))
         self.var_lookback = tk.StringVar(value="72")
         ttk.Spinbox(r1, from_=1, to=8760, width=6, textvariable=self.var_lookback).pack(side="left")
@@ -375,8 +389,12 @@ class App(tk.Tk):
         self._cookie_value = str(cfg.get("cookie") or "").strip()
         self.var_cookie.set(self._cookie_summary())
         self.var_tier.set(str(cfg.get("tier") or "standard"))
-        self.var_threshold.set(float(cfg.get("threshold") or 60))
-        self.lbl_threshold.config(text=str(int(float(self.var_threshold.get()))))
+        val = int(cfg.get("threshold") or 60)
+        self.threshold_value = max(10, min(100, val))
+        self.scale_threshold.set(self.threshold_value)
+        # Scale.set 会触发 command 并把值量化到像素，这里再写回精确值
+        self.threshold_value = max(10, min(100, val))
+        self.lbl_threshold.config(text=str(self.threshold_value))
         self.var_lookback.set(str(cfg.get("lookback_hours") or 72))
         self.var_max_pages.set(str(cfg.get("max_pages") or 8))
         self.var_interval.set(str(cfg.get("interval_seconds") or 120))
@@ -407,15 +425,27 @@ class App(tk.Tk):
         else:
             self.lbl_mode.config(text="LIVE 会真删", bg="#fee2e2", fg=ERR_RED)
 
+    def _on_threshold_move(self, value) -> None:
+        try:
+            val = int(round(float(value)))
+        except (TypeError, ValueError):
+            return
+        val = max(10, min(100, val))
+        self.threshold_value = val
+        self.lbl_threshold.config(text=str(val))
+
     def _on_tier(self) -> None:
         tier = self.var_tier.get()
         if tier == "kill":
-            self.var_threshold.set(70)
+            target = 70
         elif tier == "cup":
-            self.var_threshold.set(80)
+            target = 80
         else:
-            self.var_threshold.set(60)
-        self.lbl_threshold.config(text=str(int(float(self.var_threshold.get()))))
+            target = 60
+        self.threshold_value = target
+        self.scale_threshold.set(target)
+        self.threshold_value = target
+        self.lbl_threshold.config(text=str(target))
 
     def _on_auto_toggle(self) -> None:
         # 自动监控全部时，列表只作展示，不允许改勾选
@@ -508,6 +538,15 @@ class App(tk.Tk):
     def _log_sink(self, level: str, text: str) -> None:
         self.q.put(("log", level, text))
 
+    def _ui_log(self, line: str) -> None:
+        """界面日志同时落盘，关掉窗口也留得下来。"""
+        if self._ui_log_fp is None:
+            return
+        try:
+            self._ui_log_fp.write(line + "\n")
+        except Exception:
+            pass
+
     def _append_log(self, level: str, text: str) -> None:
         tag = "info"
         if level == "warn":
@@ -528,16 +567,32 @@ class App(tk.Tk):
             self.txt.delete("1.0", "%d.0" % (lines - 1000))
         self.txt.see("end")
         self.txt.configure(state="disabled")
+        self._ui_log(text)
 
     def _open_log(self) -> None:
-        path = self._collect_cfg()["log_file"]
-        if not os.path.exists(path):
-            messagebox.showinfo("还没有日志", "还没有产生审计日志。\n跑一次体检或守护后就有了。")
-            return
-        try:
-            os.startfile(path)  # type: ignore[attr-defined]
-        except Exception as e:
-            messagebox.showinfo("日志路径", "%s\n\n%s" % (path, e))
+        """按顺序打开存在的日志：生产审计 -> 体检日志 -> 界面日志。"""
+        cfg = self._collect_cfg()
+        candidates = [
+            ("守护审计日志", cfg["log_file"]),
+            ("体检日志", os.path.join(os.path.dirname(core.DEFAULT_CONFIG), "check-events.jsonl")),
+            ("界面日志", self._ui_log_path),
+        ]
+        for label, path in candidates:
+            if path and os.path.exists(path):
+                try:
+                    os.startfile(path)  # type: ignore[attr-defined]
+                    self._append_log("info", "已打开%s：%s" % (label, path))
+                    return
+                except Exception as e:
+                    messagebox.showinfo(label, "%s\n\n%s" % (path, e))
+                    return
+        messagebox.showinfo(
+            "还没有日志",
+            "还没有产生任何日志文件。\n\n"
+            "· 体检：点「体检（只打印，不删）」后写 check-events.jsonl\n"
+            "· 守护：点「开始守护」后写 events.jsonl\n"
+            "· 界面：所有输出都会同时写 gui.log\n\n"
+            "如果你刚跑完体检但还是这条提示，检查 config.json 所在目录是否可写。")
 
     # =====================================================================
     # 后台任务
@@ -703,10 +758,31 @@ class App(tk.Tk):
     # -- 体检 / 守护 ------------------------------------------------------
     def _prepare_guard(self, dry_run: bool, cfg: Dict[str, Any]):
         if dry_run:
-            tmp = tempfile.mkdtemp(prefix="dfy_gui_check_")
+            base = os.path.dirname(core.DEFAULT_CONFIG)
+            st = os.path.join(base, "check-state.json")
+            try:
+                # 体检每次从零开始判定，否则上一轮的去重记录会让这一轮全部跳过
+                os.remove(st)
+            except OSError:
+                pass
             cfg = dict(cfg)
-            cfg["state_file"] = os.path.join(tmp, "state.json")
-            cfg["log_file"] = os.path.join(tmp, "events.jsonl")
+            cfg["state_file"] = st
+            # 体检日志落在项目目录，点「打开审计日志」能找到
+            cfg["log_file"] = os.path.join(base, "check-events.jsonl")
+        try:
+            # 先占位建文件：这一轮如果一条都没命中，打开日志也不该提示「没有日志」
+            if dry_run:
+                with open(str(cfg.get("log_file")), "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"ts": core.now_ts(), "action": "check_start",
+                                        "tier": cfg.get("tier"), "threshold": cfg.get("threshold"),
+                                        "lookback_hours": cfg.get("lookback_hours"),
+                                        "full_history": cfg.get("full_history"),
+                                        "videos": cfg.get("videos")},
+                                       ensure_ascii=False) + "\n")
+            else:
+                open(str(cfg.get("log_file")), "a", encoding="utf-8").close()
+        except OSError:
+            pass
         guard = core.Guard(cfg, dry_run=dry_run, stop_event=self.stop_event,
                            on_round=self._on_round)
         return guard
@@ -720,7 +796,8 @@ class App(tk.Tk):
             return
         self.stop_event = threading.Event()
         self.lbl_state.config(text="● 体检中", fg=ACCENT_DARK)
-        self._append_log("info", "开始体检：只打印命中，不删除。")
+        check_log = os.path.join(os.path.dirname(core.DEFAULT_CONFIG), "check-events.jsonl")
+        self._append_log("info", "开始体检：只打印命中，不删除。明细写入 %s" % check_log)
 
         def work():
             guard = self._prepare_guard(True, cfg)
@@ -734,7 +811,18 @@ class App(tk.Tk):
 
         def done(totals):
             self.lbl_state.config(text="● 体检完成", fg=OK_GREEN)
-            self._append_log("info", "体检结束。要真删的话，取消「体检模式」再点「开始守护」。")
+            # 即使一条都没命中，也写一条汇总，避免打开日志看到空文件
+            try:
+                with open(check_log, "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"ts": core.now_ts(), "action": "check_summary",
+                                        "totals": totals, "tier": cfg.get("tier"),
+                                        "threshold": cfg.get("threshold")},
+                                       ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+            self._append_log("info", "体检结束：%s" % json.dumps(totals, ensure_ascii=False))
+            self._append_log("info", "明细已写入 check-events.jsonl（点「打开审计日志」可直接打开）。"
+                                     "要真删的话，取消「体检模式」再点「开始守护」。")
 
         self._run_bg(work, done)
 
@@ -800,6 +888,12 @@ class App(tk.Tk):
             self.stop_event.set()
         if self.worker and self.worker.is_alive():
             self.worker.join(timeout=2)
+        try:
+            if self._ui_log_fp is not None:
+                self._ui_log_fp.close()
+                self._ui_log_fp = None
+        except Exception:
+            pass
         self.destroy()
 
 

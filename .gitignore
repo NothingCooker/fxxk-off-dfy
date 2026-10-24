@@ -2,7 +2,11 @@
 config.json
 state.json
 state.json.tmp
+check-state.json
 events.jsonl
+check-events.jsonl
+gui.log
+gui.log.1
 *.log
 
 # Python

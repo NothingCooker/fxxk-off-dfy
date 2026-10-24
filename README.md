@@ -443,6 +443,17 @@ WantedBy=multi-user.target
 
 ## 日志与审计
 
+三个日志文件，都在 `config.json` 同目录：
+
+| 文件 | 产生时机 | 内容 |
+|---|---|---|
+| `events.jsonl` | **开始守护**后 | 生产审计：每条 `would_delete` / `deleted` / `delete_failed` / `blocked` |
+| `check-events.jsonl` | 点**体检**后 | 体检流水：一条 `check_start` + 每条 `would_delete` + 一条 `check_summary` |
+| `gui.log` | 界面运行期间 | 界面日志区的全部文本，关掉窗口也能回看，超 2MB 自动轮转 |
+
+GUI 的「打开审计日志」按 `events.jsonl` → `check-events.jsonl` → `gui.log` 的顺序，
+打开第一个存在的文件，不会再出现「跑完体检却提示没有日志」。
+
 **`events.jsonl`**（一行一条，UTF-8）：
 
 ```json
@@ -461,9 +472,11 @@ WantedBy=multi-user.target
 | `delete_failed` | 删除失败，带 `code`/`error`；下轮会重试，连续 3 次才放弃 |
 | `report_failed` | 举报失败，带 `code`/`error`（不影响删除） |
 | `blocked` | 已拉黑账号 |
+| `check_start` / `check_summary` | 仅 `check-events.jsonl`：体检开始时的参数快照 / 结束时的统计 |
 
 **`state.json`**：每个视频处理到哪条、已拉黑名单、累计统计。想重新全量扫描，删掉它即可
-（注意：删了会重复举报已经处理过的评论，风控上不划算）。
+（注意：删了会重复举报已经处理过的评论，风控上不划算）。体检用的是独立的 `check-state.json`，
+每次体检自动重建，不会影响正式去重。
 
 ---
 
