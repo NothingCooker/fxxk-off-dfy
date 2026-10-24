@@ -36,59 +36,34 @@ CARD2 = (32, 32, 38)
 
 FONT_ZH = r"C:\Windows\Fonts\msyh.ttc"
 FONT_ZH_B = r"C:\Windows\Fonts\msyhbd.ttc"
-FONT_MONO = r"C:\Windows\Fonts\consola.ttf"
 FFMPEG = r"C:\Program Files\BlueStacks_nxt_cn\ffmpeg.exe"
+COPY_PATH = os.path.join(HERE, "copy.json")
 
 _fcache = {}
 
 
 def f_zh(size: int, bold: bool = False):
+    """中文和英文统一用微软雅黑。
+
+    之前英文走 Consolas，两个字体 ascent/descent 不一样，同一行里中英文
+    底部对不齐、字重也差一截，看起来像字体回落。统一之后基线天然对齐。
+    """
     key = ("zh", size, bold)
     if key not in _fcache:
         _fcache[key] = ImageFont.truetype(FONT_ZH_B if bold else FONT_ZH, size)
     return _fcache[key]
 
 
-def f_en(size: int):
-    key = ("en", size)
-    if key not in _fcache:
-        _fcache[key] = ImageFont.truetype(FONT_MONO, size)
-    return _fcache[key]
-
-
-def runs(text: str):
-    """把字符串切成连续 ASCII / 非 ASCII 段，方便中英混排。"""
-    out, cur, cur_ascii = [], "", None
-    for ch in text:
-        is_ascii = ord(ch) < 128
-        if cur_ascii is None or is_ascii == cur_ascii:
-            cur += ch
-            cur_ascii = is_ascii
-        else:
-            out.append((cur, cur_ascii))
-            cur, cur_ascii = ch, is_ascii
-    if cur:
-        out.append((cur, cur_ascii))
-    return out
-
-
 def measure(text: str, size: int, bold: bool = False) -> float:
-    total = 0.0
-    for seg, ascii_ in runs(text):
-        f = f_en(size) if ascii_ else f_zh(size, bold)
-        total += f.getlength(seg)
-    return total
+    return f_zh(size, bold).getlength(text)
 
 
 def draw_text(d: ImageDraw.ImageDraw, x: float, y: float, text: str, size: int,
               color, bold: bool = False, center: bool = False) -> float:
     if center:
         x -= measure(text, size, bold) / 2
-    for seg, ascii_ in runs(text):
-        f = f_en(size) if ascii_ else f_zh(size, bold)
-        d.text((x, y), seg, font=f, fill=color)
-        x += f.getlength(seg)
-    return x
+    d.text((x, y), text, font=f_zh(size, bold), fill=color)
+    return x + measure(text, size, bold)
 
 
 def clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -152,46 +127,74 @@ _bg = make_bg()
 
 
 # ---------------------------------------------------------------------------
+# 文案（全部来自 copy.json，可用 copy-editor.html 改）
+# ---------------------------------------------------------------------------
+
+import json
+
+DEFAULT_COPY = {
+    "intro": {"eyebrow": "", "headline": "", "sub": ""},
+    "comments": {"headline": "", "sub": "", "hint": "", "tag_bot": "AI 机器人",
+                 "tag_human": "真人", "items": []},
+    "userscript": {"line1": "", "line2": "", "punch": ""},
+    "gui": {"title": "", "sub": "", "steps": [], "note": ""},
+    "terminal": {"window_title": "Windows PowerShell", "lines": []},
+    "points": {"headline": "", "items": [], "footer": ""},
+    "outro": {"title": "", "url": "", "license": "", "badge": "", "note": ""},
+}
+
+
+def load_copy() -> dict:
+    data = json.loads(json.dumps(DEFAULT_COPY))
+    if os.path.exists(COPY_PATH):
+        with open(COPY_PATH, "r", encoding="utf-8") as f:
+            user = json.load(f)
+        for section, values in (user or {}).items():
+            if section in data and isinstance(values, dict):
+                data[section].update(values)
+    return data
+
+
+COPY = load_copy()
+
+
+# ---------------------------------------------------------------------------
 # 场景
 # ---------------------------------------------------------------------------
 
 def scene_intro(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["intro"]
     a1 = fade(t, 0.20, 0.7, 3.7, 0.5)
     a2 = fade(t, 0.75, 0.8, 3.7, 0.5)
 
     if a1 > 0.01:
-        draw_text(d, W / 2, 430, "B 站评论区现状", 34, mix(BG, DIM, a1), center=True)
+        draw_text(d, W / 2, 430, c["eyebrow"], 34, mix(BG, DIM, a1), center=True)
     if a2 > 0.02:
-        draw_text(d, W / 2, 486, "机器人比观众来得还快", 78,
+        draw_text(d, W / 2, 486, c["headline"], 78,
                   mix(BG, INK, a2), bold=True, center=True)
 
     a3 = fade(t, 1.7, 1.0, 3.7, 0.5)
     if a3 > 0.01:
-        draw_text(d, W / 2, 620, "一条视频发出去，十分钟内就能刷到四五个", 30,
-                  mix(BG, DIM, a3), center=True)
+        draw_text(d, W / 2, 620, c["sub"], 30, mix(BG, DIM, a3), center=True)
     return img
-
-
-COMMENTS = [
-    ("旅行者的大肥鱼", "本鲸看完啦，这期视频的节奏把握得真到位，学到了很多", True),
-    ("深海的大肥鱼", "总结一下：首先选题有意思，其次画面也用心，最后配乐选得不错", True),
-    ("老王", "说得好，三连了", False),
-]
 
 
 def scene_comments(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["comments"]
 
     a = fade(t, 0.0, 0.5, 6.5, 0.5)
     if a > 0.01:
-        draw_text(d, 260, 150, "这些评论，你的观众也在看", 52, mix(BG, INK, a), bold=True)
-        draw_text(d, 260, 222, "机器人账号会接管真实用户，自动刷视频、自动发总结", 28,
-                  mix(BG, DIM, a))
+        draw_text(d, 260, 150, c["headline"], 52, mix(BG, INK, a), bold=True)
+        draw_text(d, 260, 222, c["sub"], 28, mix(BG, DIM, a))
 
-    for i, (name, text, bot) in enumerate(COMMENTS):
+    for i, item in enumerate(c["items"]):
+        name = str(item.get("name", ""))
+        text = str(item.get("text", ""))
+        bot = bool(item.get("bot"))
         start = 0.7 + i * 0.55
         k = ease_out(clamp((t - start) / 0.55))
         if k <= 0:
@@ -217,7 +220,7 @@ def scene_comments(t: float) -> Image.Image:
         draw_text(d, x0 + 118, y + 30, name, 30, mix(BG, INK, alpha), bold=True)
         draw_text(d, x0 + 118, y + 78, text[:34], 27, mix(BG, (200, 198, 194), alpha))
 
-        tag = "AI 机器人" if bot else "真人"
+        tag = c["tag_bot"] if bot else c["tag_human"]
         tag_color = RED if bot else GREEN
         tw = measure(tag, 22) + 28
         d.rounded_rectangle([x1 - tw - 26, y + 26, x1 - 26, y + 62], radius=8,
@@ -226,33 +229,34 @@ def scene_comments(t: float) -> Image.Image:
 
     a2 = fade(t, 3.2, 0.7, 6.5, 0.5)
     if a2 > 0.01:
-        draw_text(d, 260, 900, "昵称都带「大肥鱼」，正文是一段格式化总结", 30,
-                  mix(BG, AMBER, a2))
+        draw_text(d, 260, 900, c["hint"], 30, mix(BG, AMBER, a2))
     return img
 
 
 def scene_userscript(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["userscript"]
 
     a1 = fade(t, 0.0, 0.5, 4.4, 0.5)
     if a1 > 0.01:
-        draw_text(d, 200, 330, "油猴脚本让你自己看不见", 66, mix(BG, INK, a1), bold=True)
+        draw_text(d, 200, 330, c["line1"], 66, mix(BG, INK, a1), bold=True)
 
     a2 = fade(t, 0.7, 0.6, 4.4, 0.5)
     if a2 > 0.01:
-        draw_text(d, 200, 452, "评论还挂在那儿，别人进来照样能翻到", 40, mix(BG, DIM, a2))
+        draw_text(d, 200, 452, c["line2"], 40, mix(BG, DIM, a2))
 
     a3 = fade(t, 1.8, 0.6, 4.4, 0.5)
     if a3 > 0.01:
         d.line([200, 560, 200 + 900 * a3, 560], fill=mix(BG, PINK, a3 * 0.7), width=3)
-        draw_text(d, 200, 596, "要干净，得在服务端删掉", 44, mix(BG, PINK, a3), bold=True)
+        draw_text(d, 200, 596, c["punch"], 44, mix(BG, PINK, a3), bold=True)
     return img
 
 
 def scene_gui(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["gui"]
 
     k = fade(t, 0.0, 0.8)
     zoom = 1.0 + 0.03 * ease_out(clamp((t - 0.6) / 9.0))
@@ -268,10 +272,10 @@ def scene_gui(t: float) -> Image.Image:
 
     a = fade(t, 0.0, 0.5, 9.2, 0.5)
     if a > 0.01:
-        draw_text(d, 150, 44, "fxxk-off-dfy 图形界面", 34, mix(BG, INK, a), bold=True)
-        draw_text(d, 150, 94, "粘贴 Cookie，刷新投稿列表，点一下体检", 22, mix(BG, DIM, a))
+        draw_text(d, 150, 44, c["title"], 34, mix(BG, INK, a), bold=True)
+        draw_text(d, 150, 94, c["sub"], 22, mix(BG, DIM, a))
 
-    steps = [("1", "粘贴 Cookie", 2.2), ("2", "刷新投稿列表", 3.6), ("3", "点体检，先只打印不删", 5.0)]
+    steps = [("1", c["steps"][0], 2.2), ("2", c["steps"][1], 3.6), ("3", c["steps"][2], 5.0)]
     gap = 470
     sx = (W - gap * 3) // 2 + 40
     for i, (num, label, st) in enumerate(steps):
@@ -286,37 +290,54 @@ def scene_gui(t: float) -> Image.Image:
 
     a3 = fade(t, 6.2, 0.8)
     if a3 > 0.01:
-        draw_text(d, W / 2, 1000, "命中规则直接删，可选举报和拉黑", 24,
-                  mix(BG, DIM, a3), center=True)
+        draw_text(d, W / 2, 1000, c["note"], 24, mix(BG, DIM, a3), center=True)
     return img
 
 
-TERM_LINES = [
-    ("$ python fxxk_off_dfy.py check --all", INK, 0.0),
-    ("扫描 BV1yVhC63EKJ  哈基人的早餐被吃了（全量历史）", DIM, 0.55),
-    ("评论总数 328（含楼中楼） / 页数 6 / 扫描 224 / 命中 4", DIM, 1.10),
-    ("[DRY] 命中 name:/大肥鱼/ | score=100 | 旅行者的大肥鱼: 本鲸……", (168, 162, 158), 1.70),
-    ("[DRY] 命中 name:/大肥鱼/ | score=100 | 深海的大肥鱼: 总结一下……", (168, 162, 158), 2.25),
-    ("", INK, 2.80),
-    ("$ python fxxk_off_dfy.py run --live", INK, 3.10),
-    ("已删 name:/大肥鱼/ | score=100 | 旅行者的大肥鱼: 本鲸……", GREEN, 3.55),
-    ("已删 name:/大肥鱼/ | score=100 | 深海的大肥鱼: 总结一下……", GREEN, 3.95),
-    ("本轮汇总：删除 2 / 举报 2 / 失败 0", (220, 218, 214), 4.35),
-]
+TERM_STYLE = {
+    "cmd": INK,
+    "normal": DIM,
+    "dry": (168, 162, 158),
+    "ok": GREEN,
+    "result": (220, 218, 214),
+}
+
+
+def build_term_lines():
+    """按 copy.json 的行顺序排时间：命令前停一下，结果行连得紧一点。"""
+    items = COPY["terminal"]["lines"]
+    out, at = [], 0.0
+    for i, item in enumerate(items):
+        if i:
+            prev_empty = not COPY["terminal"]["lines"][i - 1].get("text")
+            if item.get("style") == "cmd":
+                at += 0.70
+            elif prev_empty:
+                at += 0.25
+            else:
+                at += 0.50
+        text = str(item.get("text", ""))
+        color = TERM_STYLE.get(str(item.get("style", "normal")), DIM)
+        out.append((text, color, at))
+    return out
+
+
+TERM_LINES = build_term_lines()
 
 
 def scene_terminal(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["terminal"]
 
     k = fade(t, 0.0, 0.6, 10.9, 0.6)
     x0, y0, x1, y1 = 170, 130, 1750, 866
     d.rounded_rectangle([x0, y0, x1, y1], radius=12, fill=mix(BG, (20, 20, 24), k))
     d.rounded_rectangle([x0, y0, x1, y1], radius=12, outline=mix(BG, (48, 48, 56), k), width=2)
 
-    for i, c in enumerate(((255, 95, 86), (255, 189, 46), (39, 201, 63))):
-        d.ellipse([x0 + 22 + i * 26, y0 + 18, x0 + 40 + i * 26, y0 + 36], fill=mix(BG, c, k * 0.9))
-    draw_text(d, x0 + 26, y0 + 46, "Windows PowerShell", 20, mix(BG, DIM, k))
+    for i, dot in enumerate(((255, 95, 86), (255, 189, 46), (39, 201, 63))):
+        d.ellipse([x0 + 22 + i * 26, y0 + 18, x0 + 40 + i * 26, y0 + 36], fill=mix(BG, dot, k * 0.9))
+    draw_text(d, x0 + 26, y0 + 46, c["window_title"], 20, mix(BG, DIM, k))
 
     y = y0 + 98
     for text, color, at in TERM_LINES:
@@ -340,18 +361,14 @@ def scene_terminal(t: float) -> Image.Image:
 def scene_points(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["points"]
 
     a = fade(t, 0.0, 0.5, 7.4, 0.5)
     if a > 0.01:
-        draw_text(d, 200, 220, "它做的事其实就三件", 58, mix(BG, INK, a), bold=True)
+        draw_text(d, 200, 220, c["headline"], 58, mix(BG, INK, a), bold=True)
 
-    items = [
-        ("服务端删除，所有访客都看不到", 1.0),
-        ("命中后可以顺带举报、拉黑", 1.9),
-        ("纯 Python，没有第三方依赖", 2.8),
-    ]
-    for i, (label, st) in enumerate(items):
-        kk = fade(t, st, 0.5)
+    for i, label in enumerate(c["items"]):
+        kk = fade(t, 1.0 + i * 0.9, 0.5)
         if kk <= 0.01:
             continue
         y = 390 + i * 175
@@ -360,39 +377,37 @@ def scene_points(t: float) -> Image.Image:
 
     a2 = fade(t, 4.2, 0.6, 7.4, 0.5)
     if a2 > 0.01:
-        draw_text(d, 200, 930, "Windows 双击 4-gui.bat，Linux 直接 python fxxk_off_dfy.py run", 26,
-                  mix(BG, DIM, a2))
+        draw_text(d, 200, 930, c["footer"], 26, mix(BG, DIM, a2))
     return img
 
 
 def scene_outro(t: float) -> Image.Image:
     img = _bg.copy()
     d = ImageDraw.Draw(img)
+    c = COPY["outro"]
 
     a1 = fade(t, 0.1, 0.6)
     if a1 > 0.01:
-        draw_text(d, W / 2, 360, "fxxk-off-dfy", 96, mix(BG, INK, a1), bold=True, center=True)
+        draw_text(d, W / 2, 360, c["title"], 96, mix(BG, INK, a1), bold=True, center=True)
 
     a2 = fade(t, 0.5, 0.6)
     if a2 > 0.01:
-        draw_text(d, W / 2, 500, "github.com/NothingCooker/fxxk-off-dfy", 32,
-                  mix(BG, PINK, a2), center=True)
+        draw_text(d, W / 2, 500, c["url"], 32, mix(BG, PINK, a2), center=True)
 
     a3 = fade(t, 1.0, 0.6)
     if a3 > 0.01:
-        draw_text(d, W / 2, 580, "MIT License，免费随便改", 26, mix(BG, DIM, a3), center=True)
+        draw_text(d, W / 2, 580, c["license"], 26, mix(BG, DIM, a3), center=True)
 
     a4 = fade(t, 1.8, 0.6)
     if a4 > 0.01:
-        bw = 560
+        bw = max(560, measure(c["badge"], 40, True) + 120)
         d.rounded_rectangle([W / 2 - bw / 2, 690, W / 2 + bw / 2, 770], radius=10,
                             outline=mix(BG, AMBER, a4 * 0.8), width=3)
-        draw_text(d, W / 2, 712, "先体检，再开删", 40, mix(BG, AMBER, a4), bold=True, center=True)
+        draw_text(d, W / 2, 712, c["badge"], 40, mix(BG, AMBER, a4), bold=True, center=True)
 
     a5 = fade(t, 2.6, 0.6)
     if a5 > 0.01:
-        draw_text(d, W / 2, 840, "删除不可撤销，跑一天 dry-run 看日志再开 live", 26,
-                  mix(BG, DIM, a5), center=True)
+        draw_text(d, W / 2, 840, c["note"], 26, mix(BG, DIM, a5), center=True)
     return img
 
 

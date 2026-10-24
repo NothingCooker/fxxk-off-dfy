@@ -1,0 +1,73 @@
+{
+  "intro": {
+    "eyebrow": "B 站评论区现状",
+    "headline": "机器人比观众来得还快",
+    "sub": "一条视频发出去，十分钟内就能刷到四五个"
+  },
+  "comments": {
+    "headline": "这些评论，你的观众也在看",
+    "sub": "机器人账号会接管真实用户，自动刷视频、自动发总结",
+    "hint": "昵称都带「大肥鱼」，正文是一段格式化总结",
+    "tag_bot": "AI 机器人",
+    "tag_human": "真人",
+    "items": [
+      {
+        "name": "旅行者的大肥鱼",
+        "text": "本鲸看完啦，这期视频的节奏把握得真到位，学到了很多",
+        "bot": true
+      },
+      {
+        "name": "深海的大肥鱼",
+        "text": "总结一下：首先选题有意思，其次画面也用心，最后配乐选得不错",
+        "bot": true
+      },
+      {
+        "name": "老王",
+        "text": "说得好，三连了",
+        "bot": false
+      }
+    ]
+  },
+  "userscript": {
+    "line1": "油猴脚本让你自己看不见",
+    "line2": "评论还挂在那儿，别人进来照样能翻到",
+    "punch": "要干净，得在服务端删掉"
+  },
+  "gui": {
+    "title": "fxxk-off-dfy 图形界面",
+    "sub": "粘贴 Cookie，刷新投稿列表，点一下体检",
+    "steps": ["粘贴 Cookie", "刷新投稿列表", "点体检，先只打印不删"],
+    "note": "命中规则直接删，可选举报和拉黑"
+  },
+  "terminal": {
+    "window_title": "Windows PowerShell",
+    "lines": [
+      { "text": "$ python fxxk_off_dfy.py check --all", "style": "cmd" },
+      { "text": "扫描 BV1yVhC63EKJ  哈基人的早餐被吃了（全量历史）", "style": "normal" },
+      { "text": "评论总数 328（含楼中楼） / 页数 6 / 扫描 224 / 命中 4", "style": "normal" },
+      { "text": "[DRY] 命中 name:/大肥鱼/ | score=100 | 旅行者的大肥鱼: 本鲸……", "style": "dry" },
+      { "text": "[DRY] 命中 name:/大肥鱼/ | score=100 | 深海的大肥鱼: 总结一下……", "style": "dry" },
+      { "text": "", "style": "normal" },
+      { "text": "$ python fxxk_off_dfy.py run --live", "style": "cmd" },
+      { "text": "已删 name:/大肥鱼/ | score=100 | 旅行者的大肥鱼: 本鲸……", "style": "ok" },
+      { "text": "已删 name:/大肥鱼/ | score=100 | 深海的大肥鱼: 总结一下……", "style": "ok" },
+      { "text": "本轮汇总：删除 2 / 举报 2 / 失败 0", "style": "result" }
+    ]
+  },
+  "points": {
+    "headline": "它做的事其实就三件",
+    "items": [
+      "服务端删除，所有访客都看不到",
+      "命中后可以顺带举报、拉黑",
+      "纯 Python，没有第三方依赖"
+    ],
+    "footer": "Windows 双击 4-gui.bat，Linux 直接 python fxxk_off_dfy.py run"
+  },
+  "outro": {
+    "title": "fxxk-off-dfy",
+    "url": "github.com/NothingCooker/fxxk-off-dfy",
+    "license": "MIT License，免费随便改",
+    "badge": "先体检，再开删",
+    "note": "删除不可撤销，跑一天 dry-run 看日志再开 live"
+  }
+}

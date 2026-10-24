@@ -90,8 +90,17 @@ B 站投稿用的短片，素材都在 `promo/`：
 | `promo/cover-1146.png` | 封面（B 站常用 1146x717） |
 | `promo/cover-1920.png` | 封面 16:9 版 |
 | `promo/publish.md` | 标题、简介、标签、分镜备注 |
+| `promo/copy.json` | 全片文案，生成脚本从这里读 |
+| `promo/copy-editor.html` | 可视化文案编辑器，浏览器打开就能改 |
 | `promo/make_promo.py` | 生成脚本（Pillow 逐帧绘制，ffmpeg 编码） |
 | `promo/make_cover.py` | 封面生成脚本 |
+
+改文案的流程：
+
+1. 双击 `promo/copy-editor.html`（单文件，不需要起服务）
+2. 左边按场景改字，右边 1920x1080 的预览会同步刷新
+3. 点「下载 copy.json」，覆盖 `promo/copy.json`
+4. 跑一次 `python promo/make_promo.py --encoder=h264_nvenc`，20 秒出新片
 
 重新生成（需要 Pillow、numpy 和一个带编码器的 ffmpeg）：
 

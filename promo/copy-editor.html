@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>fxxk-off-dfy 宣传片文案编辑器</title>
+<style>
+  :root{
+    --bg:#0f0f12; --ink:#e8e6e3; --dim:#8a8a92; --pink:#fb7299;
+    --card:#1a1a1f; --line:#2a2a32; --ok:#4ade80; --red:#f87171; --amber:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;background:#f4f2f0;color:#1f1f23;font-size:14px}
+  .app{display:flex;height:100vh;overflow:hidden}
+
+  /* 左侧编辑区 */
+  .side{width:520px;min-width:440px;display:flex;flex-direction:column;background:#fff;border-right:1px solid #e2ded9}
+  .head{padding:12px 16px;border-bottom:1px solid #eee}
+  .head h1{margin:0;font-size:16px}
+  .head p{margin:4px 0 0;font-size:12px;color:#8a8a92}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid #eee;background:#faf9f8}
+  button{font:inherit;font-size:12px;padding:6px 10px;border:1px solid #dcd7d2;background:#fff;border-radius:6px;cursor:pointer}
+  button:hover{background:#f3efec}
+  button.primary{background:var(--pink);border-color:var(--pink);color:#fff}
+  button.primary:hover{background:#e35b85}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;border-bottom:1px solid #eee;background:#faf9f8}
+  .tab{font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;border:1px solid transparent;color:#5a5a63}
+  .tab:hover{background:#f0ece9}
+  .tab.on{background:var(--pink);color:#fff;border-color:var(--pink)}
+  .fields{flex:1;overflow-y:auto;padding:14px 16px 40px}
+  .field{margin-bottom:14px}
+  .field > label{display:block;font-size:12px;color:#8a8a92;margin-bottom:4px}
+  input[type=text],textarea,select{width:100%;padding:7px 9px;border:1px solid #dcd7d2;border-radius:6px;font:inherit;font-size:13px;background:#fff}
+  textarea{min-height:54px;resize:vertical;line-height:1.5}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--pink)}
+  .itemcard{border:1px solid #e6e2dd;border-radius:8px;padding:10px;margin-bottom:8px;background:#fcfbfa}
+  .itemcard .rowline{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+  .itemcard .rowline input[type=text]{flex:1}
+  .tiny{font-size:11px;padding:3px 7px;border-radius:4px}
+  .hint{font-size:11px;color:#9a9aa2;margin-top:4px;line-height:1.5}
+  .chip{display:inline-block;font-size:11px;color:#6b6b73;background:#f0ece9;border-radius:4px;padding:2px 6px;margin-right:4px}
+
+  /* 右侧预览 */
+  .preview{flex:1;display:flex;flex-direction:column;background:#e7e3df;min-width:0}
+  .pvhead{padding:10px 16px;font-size:12px;color:#6b6b73;display:flex;justify-content:space-between;align-items:center}
+  .frame{position:relative;flex:1;margin:0 16px 16px;background:#0f0f12;border-radius:8px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.15)}
+  .stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:top left;background:#0f0f12;color:var(--ink);overflow:hidden}
+  .stage .t{position:absolute;white-space:pre-wrap;line-height:1.25}
+  .sc{position:absolute;inset:0;display:none}
+  .sc.on{display:block}
+  .center{transform:translateX(-50%)}
+  .card{position:absolute;border-radius:14px;background:var(--card);border:1px solid transparent}
+  .card.bot{border-color:rgba(248,113,113,.9)}
+  .card.human{border-color:rgba(60,90,70,1)}
+  .avatar{position:absolute;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--dim)}
+  .tag{position:absolute;border-radius:8px;font-size:22px;font-weight:700;padding:6px 14px}
+  .tag.bot{color:var(--red);background:rgba(248,113,113,.16)}
+  .tag.human{color:var(--ok);background:rgba(74,222,128,.16)}
+  .termbox{position:absolute;left:170px;top:130px;width:1580px;height:736px;border-radius:12px;background:#141418;border:2px solid #303038}
+  .dots{position:absolute;left:192px;top:148px;display:flex;gap:10px}
+  .dot{width:18px;height:18px;border-radius:50%}
+  .termline{position:absolute;left:204px;font-size:26px;white-space:pre;line-height:52px;color:var(--dim)}
+  .stepnum{position:absolute;width:36px;height:36px;border-radius:50%;background:var(--pink);color:#fff;font-size:22px;display:flex;align-items:center;justify-content:center}
+  .bullet{position:absolute;width:46px;height:6px;background:var(--pink);border-radius:3px}
+  .badge{position:absolute;left:50%;transform:translateX(-50%);border:3px solid rgba(245,158,11,.8);border-radius:10px;padding:18px 60px;font-size:40px;font-weight:700;color:var(--amber)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="head">
+      <h1>宣传片文案编辑器</h1>
+      <p>改完点「下载 copy.json」，放进 promo/ 覆盖原文件，再跑一次 make_promo.py</p>
+    </div>
+    <div class="bar">
+      <button class="primary" id="btnDownload">下载 copy.json</button>
+      <button id="btnImport">导入 JSON</button>
+      <button id="btnReset">恢复默认</button>
+      <input type="file" id="fileInput" accept=".json,application/json" hidden>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="fields" id="fields"></div>
+  </aside>
+
+  <main class="preview">
+    <div class="pvhead">
+      <span id="pvTitle">预览</span>
+      <span id="pvHint">1920×1080，缩放显示，排版与成片一致</span>
+    </div>
+    <div class="frame" id="frame">
+      <div class="stage" id="stage">
+        <!-- 开场 -->
+        <div class="sc" data-sc="intro">
+          <div class="t center" data-f="intro.eyebrow" style="left:50%;top:430px;font-size:34px;color:#8a8a92"></div>
+          <div class="t center" data-f="intro.headline" style="left:50%;top:486px;font-size:78px;font-weight:700"></div>
+          <div class="t center" data-f="intro.sub" style="left:50%;top:620px;font-size:30px;color:#8a8a92"></div>
+        </div>
+        <!-- 评论区 -->
+        <div class="sc" data-sc="comments">
+          <div class="t" data-f="comments.headline" style="left:260px;top:150px;font-size:52px;font-weight:700"></div>
+          <div class="t" data-f="comments.sub" style="left:260px;top:222px;font-size:28px;color:#8a8a92"></div>
+          <div id="cmCards"></div>
+          <div class="t" data-f="comments.hint" style="left:260px;top:900px;font-size:30px;color:#f59e0b"></div>
+        </div>
+        <!-- 油猴脚本 -->
+        <div class="sc" data-sc="userscript">
+          <div class="t" data-f="userscript.line1" style="left:200px;top:330px;font-size:66px;font-weight:700"></div>
+          <div class="t" data-f="userscript.line2" style="left:200px;top:452px;font-size:40px;color:#8a8a92"></div>
+          <div style="position:absolute;left:200px;top:558px;width:900px;height:3px;background:rgba(251,114,153,.7)"></div>
+          <div class="t" data-f="userscript.punch" style="left:200px;top:596px;font-size:44px;font-weight:700;color:var(--pink)"></div>
+        </div>
+        <!-- 图形界面 -->
+        <div class="sc" data-sc="gui">
+          <div class="t" data-f="gui.title" style="left:150px;top:44px;font-size:34px;font-weight:700"></div>
+          <div class="t" data-f="gui.sub" style="left:150px;top:94px;font-size:22px;color:#8a8a92"></div>
+          <img id="guiShot" src="assets/gui_crop.png" alt="" style="position:absolute;left:50%;top:158px;width:906px;transform:translateX(-50%)">
+          <div id="guiSteps"></div>
+          <div class="t center" data-f="gui.note" style="left:50%;top:1000px;font-size:24px;color:#8a8a92"></div>
+        </div>
+        <!-- 终端 -->
+        <div class="sc" data-sc="terminal">
+          <div class="termbox"></div>
+          <div class="dots">
+            <div class="dot" style="background:#ff5f56"></div>
+            <div class="dot" style="background:#ffbd2e"></div>
+            <div class="dot" style="background:#27c93f"></div>
+          </div>
+          <div class="t" data-f="terminal.window_title" style="left:196px;top:176px;font-size:20px;color:#8a8a92"></div>
+          <div id="termLines"></div>
+        </div>
+        <!-- 三个要点 -->
+        <div class="sc" data-sc="points">
+          <div class="t" data-f="points.headline" style="left:200px;top:220px;font-size:58px;font-weight:700"></div>
+          <div id="pointItems"></div>
+          <div class="t" data-f="points.footer" style="left:200px;top:930px;font-size:26px;color:#8a8a92"></div>
+        </div>
+        <!-- 结尾 -->
+        <div class="sc" data-sc="outro">
+          <div class="t center" data-f="outro.title" style="left:50%;top:360px;font-size:96px;font-weight:700"></div>
+          <div class="t center" data-f="outro.url" style="left:50%;top:500px;font-size:32px;color:var(--pink)"></div>
+          <div class="t center" data-f="outro.license" style="left:50%;top:580px;font-size:26px;color:#8a8a92"></div>
+          <div class="badge" data-f="outro.badge" style="top:690px"></div>
+          <div class="t center" data-f="outro.note" style="left:50%;top:840px;font-size:26px;color:#8a8a92"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const DEFAULT_COPY = {
+  intro: { eyebrow: "B 站评论区现状", headline: "机器人比观众来得还快", sub: "一条视频发出去，十分钟内就能刷到四五个" },
+  comments: {
+    headline: "这些评论，你的观众也在看",
+    sub: "机器人账号会接管真实用户，自动刷视频、自动发总结",
+    hint: "昵称都带「大肥鱼」，正文是一段格式化总结",
+    tag_bot: "AI 机器人", tag_human: "真人",
+    items: [
+      { name: "旅行者的大肥鱼", text: "本鲸看完啦，这期视频的节奏把握得真到位，学到了很多", bot: true },
+      { name: "深海的大肥鱼", text: "总结一下：首先选题有意思，其次画面也用心，最后配乐选得不错", bot: true },
+      { name: "老王", text: "说得好，三连了", bot: false }
+    ]
+  },
+  userscript: {
+    line1: "油猴脚本让你自己看不见",
+    line2: "评论还挂在那儿，别人进来照样能翻到",
+    punch: "要干净，得在服务端删掉"
+  },
+  gui: {
+    title: "fxxk-off-dfy 图形界面",
+    sub: "粘贴 Cookie，刷新投稿列表，点一下体检",
+    steps: ["粘贴 Cookie", "刷新投稿列表", "点体检，先只打印不删"],
+    note: "命中规则直接删，可选举报和拉黑"
+  },
+  terminal: {
+    window_title: "Windows PowerShell",
+    lines: [
+      { text: "$ python fxxk_off_dfy.py check --all", style: "cmd" },
+      { text: "扫描 BV1yVhC63EKJ  哈基人的早餐被吃了（全量历史）", style: "normal" },
+      { text: "评论总数 328（含楼中楼） / 页数 6 / 扫描 224 / 命中 4", style: "normal" },
+      { text: "[DRY] 命中 name:/大肥鱼/ | score=100 | 旅行者的大肥鱼: 本鲸……", style: "dry" },
+      { text: "[DRY] 命中 name:/大肥鱼/ | score=100 | 深海的大肥鱼: 总结一下……", style: "dry" },
+      { text: "", style: "normal" },
+      { text: "$ python fxxk_off_dfy.py run --live", style: "cmd" },
+      { text: "已删 name:/大肥鱼/ | score=100 | 旅行者的大肥鱼: 本鲸……", style: "ok" },
+      { text: "已删 name:/大肥鱼/ | score=100 | 深海的大肥鱼: 总结一下……", style: "ok" },
+      { text: "本轮汇总：删除 2 / 举报 2 / 失败 0", style: "result" }
+    ]
+  },
+  points: {
+    headline: "它做的事其实就三件",
+    items: ["服务端删除，所有访客都看不到", "命中后可以顺带举报、拉黑", "纯 Python，没有第三方依赖"],
+    footer: "Windows 双击 4-gui.bat，Linux 直接 python fxxk_off_dfy.py run"
+  },
+  outro: {
+    title: "fxxk-off-dfy",
+    url: "github.com/NothingCooker/fxxk-off-dfy",
+    license: "MIT License，免费随便改",
+    badge: "先体检，再开删",
+    note: "删除不可撤销，跑一天 dry-run 看日志再开 live"
+  }
+};
+
+const TERM_COLORS = { cmd: "#e8e6e3", normal: "#8a8a92", dry: "#a8a29e", ok: "#4ade80", result: "#dcd8d4" };
+const TERM_NAMES = { cmd: "命令（亮）", normal: "普通（灰）", dry: "dry-run（浅灰）", ok: "已删（绿）", result: "汇总（白）" };
+
+const SCHEMA = {
+  intro: { label: "开场", fields: [
+    { key: "eyebrow", label: "上方小字" },
+    { key: "headline", label: "主标题（最大）" },
+    { key: "sub", label: "下方小字" }
+  ]},
+  comments: { label: "评论区", fields: [
+    { key: "headline", label: "标题" },
+    { key: "sub", label: "副标题" },
+    { key: "hint", label: "底部橙色提示" },
+    { key: "tag_bot", label: "机器人标签" },
+    { key: "tag_human", label: "真人标签" },
+    { key: "items", label: "评论列表", type: "list", itemFields: [
+      { key: "name", label: "昵称" },
+      { key: "text", label: "内容", type: "textarea" },
+      { key: "bot", label: "标成机器人", type: "bool" }
+    ]}
+  ]},
+  userscript: { label: "油猴脚本", fields: [
+    { key: "line1", label: "第一行（大）" },
+    { key: "line2", label: "第二行（灰）" },
+    { key: "punch", label: "结论（粉色）" }
+  ]},
+  gui: { label: "图形界面", fields: [
+    { key: "title", label: "标题" },
+    { key: "sub", label: "副标题" },
+    { key: "steps", label: "底部三个步骤（每行一条）", type: "lines" },
+    { key: "note", label: "最底部提示" }
+  ]},
+  terminal: { label: "终端日志", fields: [
+    { key: "window_title", label: "窗口标题" },
+    { key: "lines", label: "日志行", type: "term" }
+  ]},
+  points: { label: "三个要点", fields: [
+    { key: "headline", label: "标题" },
+    { key: "items", label: "要点（每行一条）", type: "lines" },
+    { key: "footer", label: "底部提示" }
+  ]},
+  outro: { label: "结尾", fields: [
+    { key: "title", label: "大字" },
+    { key: "url", label: "链接" },
+    { key: "license", label: "许可证那行" },
+    { key: "badge", label: "方框里的字" },
+    { key: "note", label: "最底部提示" }
+  ]}
+};
+
+const clone = o => JSON.parse(JSON.stringify(o));
+let copy = clone(DEFAULT_COPY);
+let active = "intro";
+let dirty = false;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function setPath(obj, path, value) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  cur[parts[parts.length - 1]] = value;
+}
+
+/* ---------------- 左侧表单 ---------------- */
+function renderTabs() {
+  $("tabs").innerHTML = Object.keys(SCHEMA)
+    .map(k => `<div class="tab ${k === active ? "on" : ""}" data-tab="${k}">${SCHEMA[k].label}</div>`).join("");
+  $("tabs").querySelectorAll(".tab").forEach(el => {
+    el.onclick = () => { active = el.dataset.tab; renderTabs(); renderFields(); showScene(); };
+  });
+}
+
+function renderFields() {
+  const sc = SCHEMA[active];
+  const data = copy[active];
+  const box = $("fields");
+  box.innerHTML = "";
+  sc.fields.forEach(f => {
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+    if (f.type === "list" || f.type === "term") {
+      wrap.innerHTML = `<label>${f.label}</label><div class="hint">共 ${data[f.key].length} 条，改动即时生效</div>`;
+      const list = document.createElement("div");
+      data[f.key].forEach((item, idx) => list.appendChild(f.type === "term" ? termRow(idx) : itemCard(idx, f)));
+      const add = document.createElement("button");
+      add.textContent = "+ 添加一条";
+      add.onclick = () => {
+        data[f.key].push(f.type === "term" ? { text: "", style: "normal" }
+                                            : Object.fromEntries(f.itemFields.map(x => [x.key, x.type === "bool" ? false : ""])));
+        renderFields(); renderPreview();
+      };
+      wrap.appendChild(list);
+      wrap.appendChild(add);
+      box.appendChild(wrap);
+      return;
+    }
+    if (f.type === "lines") {
+      wrap.innerHTML = `<label>${f.label}</label>`;
+      const ta = document.createElement("textarea");
+      ta.value = (data[f.key] || []).join("\n");
+      ta.oninput = () => { data[f.key] = ta.value.split("\n").map(s => s.trim()).filter(Boolean); renderPreview(); };
+      wrap.appendChild(ta);
+      box.appendChild(wrap);
+      return;
+    }
+    wrap.innerHTML = `<label>${f.label}</label>`;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = data[f.key] ?? "";
+    input.oninput = () => { data[f.key] = input.value; renderPreview(); };
+    wrap.appendChild(input);
+    box.appendChild(wrap);
+  });
+}
+
+function itemCard(idx, f) {
+  const item = copy[active][f.key][idx];
+  const card = document.createElement("div");
+  card.className = "itemcard";
+  const head = document.createElement("div");
+  head.className = "rowline";
+  head.innerHTML = `<span class="chip">第 ${idx + 1} 条</span>`;
+  const del = document.createElement("button");
+  del.className = "tiny";
+  del.textContent = "删除";
+  del.onclick = () => { copy[active][f.key].splice(idx, 1); renderFields(); renderPreview(); };
+  head.appendChild(del);
+  card.appendChild(head);
+  f.itemFields.forEach(sf => {
+    const line = document.createElement("div");
+    line.className = "rowline";
+    if (sf.type === "bool") {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!item[sf.key];
+      cb.onchange = () => { item[sf.key] = cb.checked; renderPreview(); };
+      const lb = document.createElement("label");
+      lb.textContent = sf.label;
+      lb.style.fontSize = "12px";
+      lb.prepend(cb);
+      line.appendChild(lb);
+    } else if (sf.type === "textarea") {
+      const ta = document.createElement("textarea");
+      ta.value = item[sf.key] ?? "";
+      ta.oninput = () => { item[sf.key] = ta.value; renderPreview(); };
+      line.appendChild(ta);
+    } else {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.value = item[sf.key] ?? "";
+      inp.oninput = () => { item[sf.key] = inp.value; renderPreview(); };
+      line.appendChild(inp);
+    }
+    card.appendChild(line);
+  });
+  return card;
+}
+
+function termRow(idx) {
+  const item = copy.terminal.lines[idx];
+  const card = document.createElement("div");
+  card.className = "itemcard";
+  const row = document.createElement("div");
+  row.className = "rowline";
+
+  const ta = document.createElement("textarea");
+  ta.value = item.text ?? "";
+  ta.style.minHeight = "40px";
+  ta.oninput = () => { item.text = ta.value; renderPreview(); };
+
+  const sel = document.createElement("select");
+  sel.style.width = "150px";
+  Object.keys(TERM_NAMES).forEach(k => {
+    const o = document.createElement("option");
+    o.value = k; o.textContent = TERM_NAMES[k];
+    if (item.style === k) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.onchange = () => { item.style = sel.value; renderPreview(); };
+
+  const del = document.createElement("button");
+  del.className = "tiny";
+  del.textContent = "删";
+  del.onclick = () => { copy.terminal.lines.splice(idx, 1); renderFields(); renderPreview(); };
+
+  row.appendChild(ta);
+  row.appendChild(sel);
+  row.appendChild(del);
+  card.appendChild(row);
+  return card;
+}
+
+/* ---------------- 右侧预览 ---------------- */
+function showScene() {
+  document.querySelectorAll(".sc").forEach(el => el.classList.toggle("on", el.dataset.sc === active));
+  $("pvTitle").textContent = "预览：" + SCHEMA[active].label;
+}
+
+function renderPreview() {
+  document.querySelectorAll("[data-f]").forEach(el => {
+    const path = el.dataset.f;
+    const val = path.split(".").reduce((o, k) => (o ? o[k] : ""), copy);
+    el.textContent = val ?? "";
+  });
+
+  // 评论区卡片
+  const wrap = $("cmCards");
+  wrap.innerHTML = "";
+  copy.comments.items.forEach((it, i) => {
+    const y = 300 + i * 190;
+    const bot = !!it.bot;
+    const div = document.createElement("div");
+    div.className = "card " + (bot ? "bot" : "human");
+    div.style.cssText = `left:260px;top:${y}px;width:1400px;height:150px`;
+    div.innerHTML = `
+      <div class="avatar" style="left:28px;top:34px;width:68px;height:68px;background:${bot ? "#3a3a46" : "#343e38"}">${esc((it.name || " ")[0] ?? "")}</div>
+      <div class="t" style="left:118px;top:30px;font-size:30px;font-weight:700">${esc(it.name)}</div>
+      <div class="t" style="left:118px;top:78px;font-size:27px;color:#c8c6c2;width:1150px">${esc(it.text)}</div>
+      <div class="tag ${bot ? "bot" : "human"}" style="right:26px;top:26px">${esc(bot ? copy.comments.tag_bot : copy.comments.tag_human)}</div>`;
+    wrap.appendChild(div);
+  });
+
+  // 步骤
+  const steps = $("guiSteps");
+  steps.innerHTML = "";
+  const gap = 470, sx = (1920 - gap * 3) / 2 + 40;
+  (copy.gui.steps || []).slice(0, 3).forEach((label, i) => {
+    const x = sx + i * gap;
+    steps.insertAdjacentHTML("beforeend",
+      `<div class="stepnum" style="left:${x}px;top:918px">${i + 1}</div>
+       <div class="t" style="left:${x + 52}px;top:921px;font-size:26px">${esc(label)}</div>`);
+  });
+
+  // 终端
+  const term = $("termLines");
+  term.innerHTML = "";
+  copy.terminal.lines.forEach((ln, i) => {
+    const color = TERM_COLORS[ln.style] || "#8a8a92";
+    term.insertAdjacentHTML("beforeend",
+      `<div class="termline" style="top:${228 + i * 52 - 26}px;color:${color}">${esc(ln.text)}</div>`);
+  });
+
+  // 要点
+  const pts = $("pointItems");
+  pts.innerHTML = "";
+  (copy.points.items || []).forEach((label, i) => {
+    const y = 390 + i * 175;
+    pts.insertAdjacentHTML("beforeend",
+      `<div class="bullet" style="left:200px;top:${y + 18}px"></div>
+       <div class="t" style="left:276px;top:${y}px;font-size:44px">${esc(label)}</div>`);
+  });
+
+  // 结尾 badge 宽度自适应
+  const badge = document.querySelector(".badge");
+  if (badge) badge.style.padding = "18px 60px";
+}
+
+/* ---------------- 缩放 ---------------- */
+function fit() {
+  const frame = $("frame");
+  const stage = $("stage");
+  const w = frame.clientWidth, h = frame.clientHeight;
+  const s = Math.min(w / 1920, h / 1080);
+  stage.style.transform = `scale(${s})`;
+  stage.style.left = ((w - 1920 * s) / 2) + "px";
+  stage.style.top = ((h - 1080 * s) / 2) + "px";
+}
+
+/* ---------------- 导入导出 ---------------- */
+$("btnDownload").onclick = () => {
+  const blob = new Blob([JSON.stringify(copy, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "copy.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+$("btnImport").onclick = () => $("fileInput").click();
+$("fileInput").onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      copy = clone(DEFAULT_COPY);
+      Object.keys(copy).forEach(k => { if (data[k]) Object.assign(copy[k], data[k]); });
+      renderFields(); renderPreview();
+      alert("导入成功");
+    } catch (err) {
+      alert("JSON 解析失败：" + err.message);
+    }
+  };
+  reader.readAsText(f, "utf-8");
+  e.target.value = "";
+};
+
+$("btnReset").onclick = () => {
+  if (!confirm("恢复默认文案？当前修改会丢失")) return;
+  copy = clone(DEFAULT_COPY);
+  renderFields(); renderPreview();
+};
+
+window.addEventListener("resize", fit);
+renderTabs();
+renderFields();
+showScene();
+renderPreview();
+fit();
+</script>
+</body>
+</html>
