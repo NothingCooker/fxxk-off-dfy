@@ -232,8 +232,9 @@ def normalize_text(s: str) -> str:
 
 
 def load_json(path: str, default: Any = None) -> Any:
+    # utf-8-sig：Windows 记事本 / PowerShell 保存的文件常带 BOM，普通 utf-8 会直接报错
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             return json.load(f)
     except FileNotFoundError:
         return default
@@ -950,7 +951,7 @@ class State:
     def _load(self) -> Dict[str, Any]:
         raw: Any = {}
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, "r", encoding="utf-8-sig") as f:
                 raw = json.load(f)
         except FileNotFoundError:
             raw = {}
