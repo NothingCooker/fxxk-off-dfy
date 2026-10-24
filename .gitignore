@@ -12,6 +12,12 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# 宣传片临时产物
+promo/__pycache__/
+promo/*.log
+promo/check_*.png
+promo/*-test.mp4
+
 # 编辑器 / 系统
 .vscode/
 .idea/

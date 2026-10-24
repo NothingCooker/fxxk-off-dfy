@@ -18,6 +18,7 @@
 ## 目录
 
 - [GUI 版（推荐）](#gui-版推荐)
+- [宣传片](#宣传片)
 - [原理](#原理)
 - [5 分钟上手](#5-分钟上手)
 - [Cookie 怎么拿](#cookie-怎么拿)
@@ -76,6 +77,30 @@ Tkinter 写的，标准库自带，**不用装任何东西**。
 GUI 和 CLI 可以混着用。日志区里 `已删` 是红的、`[DRY]` 是灰的、`已拉黑` 是紫的。
 
 > 「体检」用的是临时 state/events，不会污染生产审计日志 `events.jsonl`。
+
+---
+
+## 宣传片
+
+B 站投稿用的短片，素材都在 `promo/`：
+
+| 文件 | 说明 |
+|---|---|
+| `promo/fxxk-off-dfy-promo.mp4` | 1920x1080 / 30fps / 53 秒 / H.264 / 无音轨 |
+| `promo/cover-1146.png` | 封面（B 站常用 1146x717） |
+| `promo/cover-1920.png` | 封面 16:9 版 |
+| `promo/publish.md` | 标题、简介、标签、分镜备注 |
+| `promo/make_promo.py` | 生成脚本（Pillow 逐帧绘制，ffmpeg 编码） |
+| `promo/make_cover.py` | 封面生成脚本 |
+
+重新生成（需要 Pillow、numpy 和一个带编码器的 ffmpeg）：
+
+```bash
+python promo/make_promo.py --encoder=h264_nvenc    # 或 libopenh264
+python promo/make_cover.py
+```
+
+视频没有音轨，上传到 B 站后直接在创作中心挑一首平台免费 BGM 就行。
 
 ---
 
