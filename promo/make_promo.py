@@ -172,7 +172,10 @@ def scene_intro(t: float) -> Image.Image:
     if a1 > 0.01:
         draw_text(d, W / 2, 430, c["eyebrow"], 34, mix(BG, DIM, a1), center=True)
     if a2 > 0.02:
-        draw_text(d, W / 2, 486, c["headline"], 78,
+        # 标题短的时候放大一点，免得四个字孤零零挂在中间
+        n = len(c["headline"])
+        hsize = 108 if n <= 4 else (94 if n <= 6 else 78)
+        draw_text(d, W / 2, 486 - (hsize - 78) // 3, c["headline"], hsize,
                   mix(BG, INK, a2), bold=True, center=True)
 
     a3 = fade(t, 1.7, 1.0, 3.7, 0.5)
@@ -195,11 +198,13 @@ def scene_comments(t: float) -> Image.Image:
         name = str(item.get("name", ""))
         text = str(item.get("text", ""))
         bot = bool(item.get("bot"))
+        # 评论少的时候整体下移，别让下半屏空着
+        start_y = 300 + max(0, 3 - len(c["items"])) * 80
         start = 0.7 + i * 0.55
         k = ease_out(clamp((t - start) / 0.55))
         if k <= 0:
             continue
-        y = 300 + i * 190 + (1 - k) * 26
+        y = start_y + i * 190 + (1 - k) * 26
         alpha = k
 
         x0, x1 = 260, 1660
